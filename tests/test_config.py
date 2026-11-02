@@ -7,6 +7,7 @@ from sports_tracker.config import (
     DatabaseSettings,
     build_connection_string,
     load_database_settings,
+    load_openligadb_settings,
 )
 
 
@@ -87,3 +88,26 @@ def test_settings_repr_redacts_password() -> None:
 
     assert "unit-test-password" not in repr(settings)
     assert "<redacted>" in repr(settings)
+
+
+def test_load_openligadb_settings_from_environment(tmp_path: Path) -> None:
+    values = {
+        "OPENLIGADB_BASE_URL": "https://api.openligadb.de",
+        "OPENLIGADB_SHORTCUT": "ucl",
+        "OPENLIGADB_SEASON": "2026",
+        "OPENLIGADB_EXPECTED_LEAGUE_ID": "4946",
+        "OPENLIGADB_TIMEOUT_SECONDS": "10",
+        "RAW_SNAPSHOT_DIRECTORY": "data/raw",
+    }
+
+    settings = load_openligadb_settings(
+        dotenv_path=tmp_path / "missing.env",
+        environ=values,
+    )
+
+    assert settings.base_url == "https://api.openligadb.de"
+    assert settings.shortcut == "ucl"
+    assert settings.season == 2026
+    assert settings.expected_league_id == 4946
+    assert settings.timeout_seconds == 10.0
+    assert settings.raw_snapshot_directory == Path("data/raw")
