@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
@@ -47,6 +49,19 @@ class DatabaseSettings:
         return build_connection_string(self)
 
 
+@dataclass(frozen=True)
+class OpenLigaDBSettings:
+    """Validated settings for retrieving OpenLigaDB matchday data."""
+
+    base_url: str
+    shortcut: str
+    season: int
+    expected_league_id: int
+    timeout_seconds: float
+    raw_snapshot_directory: Path
+    user_agent: str = "sports-fixtures-change-tracker/0.1 (OpenLigaDB client)"
+
+
 def escape_odbc_value(value: str) -> str:
     """Brace-quote an ODBC value and escape closing braces safely."""
 
@@ -78,14 +93,22 @@ def _read_local_values(dotenv_path: str | Path | None) -> dict[str, str]:
     return {key: value for key, value in dotenv_values(path).items() if value is not None}
 
 
+def _merged_values(
+    dotenv_path: str | Path | None,
+    environ: Mapping[str, str] | None,
+) -> dict[str, str]:
+    values = _read_local_values(dotenv_path)
+    values.update(dict(os.environ if environ is None else environ))
+    return values
+
+
 def load_database_settings(
     dotenv_path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> DatabaseSettings:
     """Load `.env` values, overridden by process environment values, and validate them."""
 
-    values = _read_local_values(dotenv_path)
-    values.update(dict(os.environ if environ is None else environ))
+    values = _merged_values(dotenv_path, environ)
 
     host = _required_value(values, "SQL_SERVER_HOST").strip()
     database = _required_value(values, "SQL_SERVER_DATABASE").strip()
@@ -108,6 +131,67 @@ def load_database_settings(
         password=password,
         encrypt=_yes_or_no(values, "SQL_SERVER_ENCRYPT"),
         trust_server_certificate=_yes_or_no(values, "SQL_SERVER_TRUST_CERTIFICATE"),
+    )
+
+
+def _validated_base_url(value: str) -> str:
+    base_url = value.strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ConfigurationError(
+            "OPENLIGADB_BASE_URL must be an HTTP(S) URL without credentials or query parameters"
+        )
+    return base_url
+
+
+def _positive_int(values: Mapping[str, str], key: str) -> int:
+    value = _required_value(values, key).strip()
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ConfigurationError(f"Database/source setting {key} must be an integer") from exc
+    if parsed <= 0:
+        raise ConfigurationError(f"Database/source setting {key} must be greater than zero")
+    return parsed
+
+
+def load_openligadb_settings(
+    dotenv_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> OpenLigaDBSettings:
+    """Load and validate OpenLigaDB source settings from `.env` and the environment."""
+
+    values = _merged_values(dotenv_path, environ)
+    base_url = _validated_base_url(_required_value(values, "OPENLIGADB_BASE_URL"))
+    shortcut = _required_value(values, "OPENLIGADB_SHORTCUT").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]+", shortcut) is None:
+        raise ConfigurationError("OPENLIGADB_SHORTCUT contains unsupported URL path characters")
+
+    season = _positive_int(values, "OPENLIGADB_SEASON")
+    expected_league_id = _positive_int(values, "OPENLIGADB_EXPECTED_LEAGUE_ID")
+    timeout_text = _required_value(values, "OPENLIGADB_TIMEOUT_SECONDS").strip()
+    try:
+        timeout_seconds = float(timeout_text)
+    except ValueError as exc:
+        raise ConfigurationError("OPENLIGADB_TIMEOUT_SECONDS must be a number") from exc
+    if timeout_seconds <= 0:
+        raise ConfigurationError("OPENLIGADB_TIMEOUT_SECONDS must be greater than zero")
+
+    raw_directory = _required_value(values, "RAW_SNAPSHOT_DIRECTORY").strip()
+    return OpenLigaDBSettings(
+        base_url=base_url,
+        shortcut=shortcut,
+        season=season,
+        expected_league_id=expected_league_id,
+        timeout_seconds=timeout_seconds,
+        raw_snapshot_directory=Path(raw_directory),
     )
 
 
