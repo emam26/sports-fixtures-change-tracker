@@ -6,7 +6,7 @@ Status: proposed application design. The Stage 0 configuration and connection fo
 
 Collect real football fixtures/results, preserve source evidence, validate and store current records in SQL Server, record observed changes, and provide a local review interface.
 
-Begin with one Bundesliga matchday from 2025/26. Expand to full 2025/26 and 2026/27 after repeatable import and recovery checks pass.
+The current competition scope is the UEFA Champions League 2026/27: OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`. Start with Matchdays 3 and 4, then expand to all 144 league-phase fixtures and later knockout fixtures after repeatable import and recovery checks pass.
 
 The application is a local portfolio project. It does not claim an existing customer, production deployment, or continuous operation while the user's computer is off.
 
@@ -18,6 +18,8 @@ The application is a local portfolio project. It does not claim an existing cust
 - `scripts/check_database.py` runs one read-only SQL Server metadata query without displaying the password or complete connection string.
 
 No database tables, migrations, ingestion, API, UI, or scheduler are implemented in Stage 0.
+
+Competition selection must remain configurable through the OpenLigaDB shortcut, season, league ID, and matchday selection so the architecture can support future competitions. Only the UEFA Champions League 2026/27 is currently planned; this configurability does not imply that other competitions or ingestion are implemented.
 
 ## Components
 

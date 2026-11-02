@@ -24,7 +24,7 @@ They establish environment details only. Results are recorded in BUILD_PLAN.md. 
 
 ## Stage 0 foundation verification
 
-Status: the project foundation is implemented, but the commands below are NOT RUN by Codex. The user must execute them manually and return only non-secret output.
+Status: Stage 0 is complete and verified from user-supplied manual execution evidence on 2026-11-02. Codex did not execute the commands. UCL ingestion and every later stage remain not started.
 
 ### WSL Bash, project environment
 
@@ -37,7 +37,7 @@ python -m pip install -e ".[dev]"
 if [ ! -f .env ]; then cp .env.example .env; fi
 ```
 
-Expected result: the existing virtual environment is active and the local package, `pyodbc==5.3.0`, `python-dotenv`, pytest, and Ruff are installed. If activation or installation fails, stop and return the non-secret error before continuing.
+Verified result on 2026-11-02: editable project installation succeeded. The local package, `pyodbc==5.3.0`, `python-dotenv`, pytest, and Ruff were available. `.env` is ignored by Git. No password or `.env` contents were recorded.
 
 Edit `.env` locally after copying it. Set `SQL_SERVER_HOST` to the current Windows host address visible from WSL, keep `SQL_SERVER_PORT=1433`, and enter the password only in `.env`. The user-reported address is currently `172.20.80.1`; it may change after a WSL or network restart. Inspect the current candidate with:
 
@@ -56,13 +56,15 @@ Working directory: `/mnt/f/sports-fixtures-change-tracker`; keep the virtual env
 python -m pytest
 ```
 
-Expected result: the focused configuration tests pass. This is an offline check and does not establish SQL Server connectivity. If it fails, stop and return the non-secret failure output.
+Verified result on 2026-11-02: pytest passed 5 tests in 0.13 seconds. This is an offline check and does not establish UCL ingestion or later-stage behavior.
 
 ```bash
 ruff check .
 ```
 
-Expected result: Ruff reports no errors. This is a static check and does not establish SQL Server connectivity. If it fails, stop and return the non-secret failure output.
+Verified result on 2026-11-02: Ruff check passed. This is a static check and does not establish UCL ingestion or later-stage behavior.
+
+Ruff formatting verification also passed, with 10 files formatted.
 
 ### WSL Bash, permanent read-only database check
 
@@ -72,7 +74,7 @@ Working directory: `/mnt/f/sports-fixtures-change-tracker`; use the local `.env`
 python scripts/check_database.py
 ```
 
-Expected result: `Database connection succeeded.` followed by server name, login name, database name, edition, and product version. The script runs a read-only metadata query and must never display the password or complete connection string. The user has already reported a successful manual Python connection, but this permanent project check remains NOT RUN until this command is executed.
+Verified result on 2026-11-02: `scripts/check_database.py` succeeded and reported server `CANVASIT`, login `sports_tracker_app`, database `SportsFixturesTracker`, edition `Standard Developer Edition (64-bit)`, and version `17.0.1000.7`. The script runs a read-only metadata query and did not record or display the password or complete connection string.
 
 ## Required format for future procedures
 
@@ -89,15 +91,15 @@ Do not insert guessed executable names or commands for code that does not yet ex
 
 ## Project environment and dependencies
 
-Status: user-reported prerequisites are established; Stage 0 project installation and checks remain NOT RUN.
+Status: Stage 0 project installation and checks are complete and verified from user-supplied evidence dated 2026-11-02.
 
-User-reported evidence on 2026-11-01: Python 3.14.4 virtual environment created and pyodbc 5.3.0 installed. Use the Stage 0 procedure above to record the actual activation, editable installation, pytest, and Ruff results. Do not modify Conda base.
+User-reported evidence: Python 3.14.4 virtual environment created, pyodbc 5.3.0 installed, editable project installation succeeded, Ruff check passed, Ruff formatting check passed with 10 files formatted, and pytest passed 5 tests in 0.13 seconds. Do not modify Conda base.
 
 ## Database connection and schema
 
-Status: user-reported connection prerequisites and a manual Python connection are confirmed; the permanent project check remains NOT RUN.
+Status: user-reported connection prerequisites, manual Python connection, and permanent project check are confirmed for Stage 0; no schema or ingestion work has started.
 
-User-reported target on 2026-11-01: SQL Server `CANVASIT`, Standard Developer Edition, version `17.0.1000.7`; database `SportsFixturesTracker`; runtime login `sports_tracker_app`; TCP `172.20.80.1:1433`; ODBC Driver 18 installed; sqlcmd authentication succeeded. No password is recorded here. The Stage 0 script performs only its read-only metadata query; no tables or schema are created.
+User-reported target and verified check on 2026-11-02: SQL Server `CANVASIT`, Standard Developer Edition (64-bit), version `17.0.1000.7`; database `SportsFixturesTracker`; runtime login `sports_tracker_app`; TCP `172.20.80.1:1433`; ODBC Driver 18 installed; sqlcmd authentication succeeded. No password is recorded here. The Stage 0 script performs only its read-only metadata query; no tables or schema are created.
 
 Record the actual current WSL-visible host if it differs after a restart. Keep actual passwords outside this document.
 
@@ -107,13 +109,15 @@ SQL intended for a query window must be labeled as SQL, with its target database
 
 Status: not implemented or verified.
 
-After Stages 1–3, document commands to capture one matchday, inspect provenance, validate, import, repeat unchanged input, inspect issues, and retry or replay an eligible failed input.
+Current planned source scope: UEFA Champions League 2026/27 through OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`. Begin with Matchdays 3 and 4, then expand to all 144 league-phase fixtures and later knockout fixtures. No ingestion is complete or verified.
+
+After Stages 1–3, document commands to capture UCL Matchdays 3 and 4, inspect provenance, validate, import, repeat unchanged input, inspect issues, and retry or replay an eligible failed input.
 
 Document the selected data scope and where raw responses and logs are retained. Keep controlled test changes separate from real collected data.
 
 ## Tests
 
-Status: focused configuration tests are written but NOT RUN.
+Status: focused configuration tests passed on 2026-11-02: 5 tests in 0.13 seconds. This verifies Stage 0 configuration behavior only.
 
 Run `python -m pytest` from the active WSL virtual environment for the offline configuration tests. Keep separate procedures for SQL Server integration tests, live-source checks, API requests, browser checks, and scheduled-run checks.
 

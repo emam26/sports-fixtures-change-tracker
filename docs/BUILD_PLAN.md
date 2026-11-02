@@ -6,7 +6,7 @@ Prepared: 2026-10-25. These starter documents were prepared outside the user's c
 
 ## Current stage
 
-Stage 0 — setup and planning. Foundation implemented; manual verification pending.
+Stage 0 — setup and planning. Complete and verified on 2026-11-02.
 
 Confirmed from user-reported command output on 2026-11-01:
 - SQL Server host: CANVASIT.
@@ -30,24 +30,44 @@ Implemented in this checkout:
 - Focused offline configuration tests and basic pytest/Ruff configuration.
 
 Unconfirmed or NOT RUN:
-- The permanent project check script has not been run.
-- The automated tests and Ruff check have not been run.
-- The editable project installation has not been run.
 - No import, schema, API, UI, scheduler, or live-source checks have been performed.
 - `docs/PROJECT_ROADMAP.md` is referenced by `AGENTS.md` but is absent from this checkout.
+
+Current planned scope:
+- Competition: UEFA Champions League 2026/27.
+- OpenLigaDB shortcut: `ucl`.
+- Season: `2026`.
+- League ID: `4946`.
+- Initial scope: Matchdays 3 and 4.
+- Expansion scope: all 144 league-phase fixtures, followed by later knockout fixtures.
+- Ingestion is not complete or verified.
+
+Verified Stage 0 evidence supplied by the user on 2026-11-02:
+- Editable project installation succeeded.
+- Ruff check passed.
+- Ruff formatting check passed with 10 files formatted.
+- pytest passed: 5 tests in 0.13 seconds.
+- `scripts/check_database.py` succeeded.
+- Server: CANVASIT.
+- Login: sports_tracker_app.
+- Database: SportsFixturesTracker.
+- Edition: Standard Developer Edition (64-bit).
+- Version: 17.0.1000.7.
+- `.env` is ignored by Git.
+- No password or `.env` contents were recorded.
 
 ## Stage tracker
 
 | Stage | Deliverable | Completion evidence | Status |
 | --- | --- | --- | --- |
-| 0 | Environment, SQL connection, instructions, plan | Dedicated interpreter and successful connection query | In progress; foundation implemented; permanent check and tests NOT RUN |
-| 1 | Real matchday capture and validated source contract | Capture manifest and passing offline checks | Planned |
-| 2 | SQL schema and repeatable first import | Reconciliation and duplicate-free rerun | Planned |
-| 3 | Observed changes, recovery, incremental and season imports | Controlled change, rollback, retry, and reconciliation | Planned |
-| 4 | FastAPI and local notes CRUD | Normal, missing, and invalid request checks | Planned |
-| 5 | HTML/CSS/JavaScript interface | Browser review and notes workflow | Planned |
-| 6 | Scheduled imports | Evidence of a real scheduled run and logs | Planned |
-| 7 | Final verification, docs, demo, GitHub publication | Final checklist and published implementation | Planned |
+| 0 | Environment, SQL connection, instructions, plan | Dedicated interpreter and successful connection query | Complete and verified (2026-11-02) |
+| 1 | Real UCL matchday capture and validated source contract | Capture manifest and passing offline checks | Not started |
+| 2 | SQL schema and repeatable first import | Reconciliation and duplicate-free rerun | Not started |
+| 3 | Observed changes, recovery, incremental UCL league-phase and knockout imports | Controlled change, rollback, retry, and reconciliation | Not started |
+| 4 | FastAPI and local notes CRUD | Normal, missing, and invalid request checks | Not started |
+| 5 | HTML/CSS/JavaScript interface | Browser review and notes workflow | Not started |
+| 6 | Scheduled imports | Evidence of a real scheduled run and logs | Not started |
+| 7 | Final verification, docs, demo, GitHub publication | Final checklist and published implementation | Not started |
 
 ## Evidence ledger
 
@@ -65,8 +85,14 @@ These results were supplied by the user; they were not independently executed by
 | E008 | ODBC and sqlcmd prerequisites | ODBC Driver 18 installed; sqlcmd authentication succeeded | User-reported driver and CLI checks |
 | E009 | Python prerequisites | Python 3.14.4 virtual environment; pyodbc 5.3.0 installed | User-reported environment setup |
 | E010 | Manual Python connection | Succeeded | User-reported connection evidence; not the permanent project check |
+| E011 | Editable project installation | Succeeded | User-reported Stage 0 installation evidence |
+| E012 | Ruff check | Passed | User-reported static check evidence |
+| E013 | Ruff formatting check | Passed; 10 files formatted | User-reported formatting evidence |
+| E014 | pytest | Passed; 5 tests in 0.13 seconds | User-reported offline test evidence |
+| E015 | `scripts/check_database.py` | Succeeded; CANVASIT; sports_tracker_app; SportsFixturesTracker; Standard Developer Edition (64-bit); 17.0.1000.7 | User-reported read-only SQL Server check evidence |
+| E016 | `.env` ignore rule | `.env` is ignored by Git | User-reported ignore-rule evidence |
 
-Do not treat these as application verification. Keep large logs local; record concise relevant results without secrets.
+Treat E005–E016 as Stage 0 evidence only; they do not verify UCL ingestion or later stages. Keep large logs local; record concise relevant results without secrets.
 
 ## Decisions
 
@@ -75,12 +101,23 @@ Do not treat these as application verification. Keep large logs local; record co
 | Python, SQL Server, FastAPI, plain HTML/CSS/JS | Agreed stack | Covers collection, relational storage, API, and review UI |
 | WSL Bash; repository on F drive | Confirmed preference | User-selected workflow |
 | All operational execution is manual | Confirmed requirement | User runs terminal, SQL, API, browser, scheduling, and Git steps |
-| One matchday before whole seasons | Agreed sequence | Makes correctness and troubleshooting manageable |
+| UCL Matchdays 3 and 4 before all 144 league-phase fixtures | Agreed sequence | Makes correctness and troubleshooting manageable |
+| Configurable competition parameters | Required design constraint | Keep shortcut, season, league ID, and matchday selection reusable while the current scope remains UCL-only |
 | All-or-nothing current-record update per matchday | Proposed for implementation | Avoids partially applied invalid batches |
 | SQL Server host, auth, and driver | User evidence supplied | CANVASIT, SportsFixturesTracker, sports_tracker_app, TCP 172.20.80.1:1433, and ODBC Driver 18 are recorded; the permanent project check remains NOT RUN |
 | Scheduler | Unresolved | Deferred until the import is reliable |
 
-## Latest handoff - 2026-11-01
+## Verification handoff - 2026-11-02
+
+- Stage and status: Stage 0 complete and verified; UCL ingestion and every later stage remain not started.
+- Files changed: `.gitignore`, `README.md`, `docs/BUILD_PLAN.md`, and `docs/MANUAL_RUNBOOK.md`.
+- Implemented behavior: recorded the successful editable installation, Ruff checks, pytest result, read-only database check, SQL Server metadata, and `.env` ignore evidence without any password or `.env` contents.
+- Checks and supplied evidence: editable installation succeeded; Ruff check passed; Ruff formatting check passed with 10 files formatted; pytest passed 5 tests in 0.13 seconds; `scripts/check_database.py` succeeded against the recorded server, login, database, edition, and version.
+- Checks NOT RUN: UCL ingestion, source/API calls, schema work, imports, API, UI, scheduling, and all later-stage verification.
+- Failure or blocker: no Stage 0 blocker remains; `docs/PROJECT_ROADMAP.md` remains absent as previously recorded.
+- Exact next step: begin Stage 1 for UCL Matchdays 3 and 4 only when ready; do not treat the Stage 0 evidence as ingestion evidence.
+
+## Previous handoff - 2026-11-01
 
 - Stage and status: Stage 0 foundation implemented; manual verification pending.
 - Files changed: `pyproject.toml`, `.env.example`, `src/sports_tracker/__init__.py`, `src/sports_tracker/config.py`, `src/sports_tracker/database.py`, `scripts/check_database.py`, `tests/test_config.py`, `README.md`, `docs/ARCHITECTURE.md`, `docs/BUILD_PLAN.md`, and `docs/MANUAL_RUNBOOK.md`.
@@ -92,15 +129,22 @@ Do not treat these as application verification. Keep large logs local; record co
 - Decision and reason: keep all operational execution manual and keep the SQL password only in the ignored local `.env` file.
 - Exact next step: follow the numbered commands under `Next manual handoff`, stopping after the first failed prerequisite and returning only non-secret output.
 
+## Scope update handoff - 2026-11-01
+
+- Stage and status: Stage 0 foundation remains implemented; competition scope is now UCL-only and ingestion remains NOT RUN.
+- Files changed: `README.md`, `docs/ARCHITECTURE.md`, `docs/BUILD_PLAN.md`, and `docs/MANUAL_RUNBOOK.md`.
+- Implemented behavior: documentation now identifies UEFA Champions League 2026/27, OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`, Matchdays 3 and 4 as the starting scope, and expansion to all 144 league-phase fixtures plus later knockout fixtures.
+- Design constraint: competition shortcut, season, league ID, and matchday selection remain configurable for future reuse; no other competition is currently planned.
+- Checks and supplied evidence: read-only search confirmed that superseded competition names, shortcuts, and prior-season scope terms are absent from `README.md` and `docs/`.
+- Checks NOT RUN: all project code, tests, linters, API calls, database commands, imports, and scheduled runs.
+- Failure or blocker: none introduced by this documentation-only scope update. `AGENTS.md` was not modified because the requested edit scope excludes it.
+- Exact next step: review the UCL scope wording, then follow the existing manual verification handoff only when ready; do not treat this documentation update as ingestion evidence.
+
 ## Next manual handoff
 
-1. WSL Bash, `/mnt/f/sports-fixtures-change-tracker`: activate the existing `.venv` with `source .venv/bin/activate`.
-2. Install the local project and development tools with `python -m pip install -e ".[dev]"`.
-3. Copy `.env.example` to `.env`, set `SQL_SERVER_HOST` to the current WSL-visible Windows host address, and enter the password only in the ignored local file.
-4. Run `python -m pytest`; expect the focused configuration tests to pass. Stop and return the non-secret failure if it does not.
-5. Run `ruff check .`; expect no lint errors. Stop and return the non-secret failure if it does not.
-6. Run `python scripts/check_database.py`; expect the read-only success message and server metadata, with no password or complete connection string.
-7. Return only non-secret output. Do not start Stage 1 until these checks are reviewed.
+1. Stage 0 verification is complete based on the user-supplied evidence above.
+2. Keep UCL ingestion and every later stage marked not started.
+3. When proceeding, begin Stage 1 with UCL Matchdays 3 and 4 only and return non-secret evidence after each manual prerequisite.
 
 Do not install or reconfigure the database based only on an assumption that SSMS includes the engine.
 

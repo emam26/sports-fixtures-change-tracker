@@ -2,7 +2,7 @@
 
 > Football fixture imports, data checks, and observed change tracking with Python and SQL Server.
 
-![Status: Design stage](https://img.shields.io/badge/status-design%20stage-yellow)
+![Status: Stage 0 complete](https://img.shields.io/badge/status-Stage%200%20complete-brightgreen)
 ![Python](https://img.shields.io/badge/language-Python-3776AB?logo=python&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/database-SQL%20Server-CC2927)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
@@ -10,9 +10,9 @@
 The project addresses a practical question: **what changed in a fixture or result, and which import recorded it?** The planned application collects football data from OpenLigaDB, checks incoming records, stores them in SQL Server, and keeps a history of observed changes.
 
 > [!NOTE]
-> This repository currently documents the design. Implementation has not started.
-> The features, schema, and checks below are planned. Setup commands, screenshots,
-> and test results will be added alongside working code.
+> This repository documents the planned application and the verified Stage 0
+> foundation. UCL ingestion, the schema, API, UI, scheduler, and all later-stage
+> checks have not started.
 
 ## Why this project
 
@@ -24,12 +24,11 @@ The intended user is someone maintaining a small sports data application. They s
 
 Data will come from [OpenLigaDB](https://www.openligadb.de/), a community-maintained sports database. It is not an official league feed.
 
-The initial scope is Bundesliga (`bl1`), using the 2025/26 season for an initial load and 2026/27 for continuing updates. OpenLigaDB uses the season's starting year in its URLs.
+The current scope is the UEFA Champions League 2026/27: OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`. Start with Matchdays 3 and 4, then expand to all 144 league-phase fixtures and later knockout fixtures. OpenLigaDB uses the season's starting year in its URLs.
 
 Reference endpoints:
 
-- [2025/26 matches](https://api.openligadb.de/getmatchdata/bl1/2025)
-- [2026/27 matches](https://api.openligadb.de/getmatchdata/bl1/2026)
+- [2026/27 Champions League matches](https://api.openligadb.de/getmatchdata/ucl/2026)
 - [API documentation](https://api.openligadb.de/index.html)
 - [OpenAPI specification](https://api.openligadb.de/swagger/v1/swagger.json)
 
@@ -39,7 +38,7 @@ OpenLigaDB data is provided under [ODbL 1.0](https://opendatacommons.org/license
 
 ## Planned workflow
 
-1. Fetch a season or matchday and preserve the original JSON with its URL, retrieval time, and payload hash.
+1. Fetch the configured UCL 2026/27 season or selected matchday and preserve the original JSON with its URL, retrieval time, and payload hash.
 2. Check required identifiers, team references, timestamps, and result fields.
 3. Store valid records in SQL Server and record rejected records with an explanation.
 4. Compare incoming business fields with the stored match and record observed changes.
@@ -50,8 +49,8 @@ Unchanged imports should not create extra matches or change-history entries. Fet
 
 ## Planned features
 
-- Initial season import and subsequent matchday updates.
-- Current fixture and result lookup, with league, season, and team filters.
+- Initial UCL Matchdays 3 and 4 import, followed by the remaining league-phase and knockout matchdays.
+- Current fixture and result lookup, with competition, season, and team filters.
 - A history showing previous and current values for observed schedule and result changes.
 - Import summaries showing accepted, rejected, unchanged, and changed records.
 - An error view for reviewing records that could not be imported.
@@ -113,4 +112,38 @@ Deliberately altered test fixtures will be labeled as test data and kept separat
 
 ## Current setup
 
-There is no runnable application release yet. Start by documenting the source contract and creating the SQL schema, then implement one manual season import. Installation and launch commands will be added alongside the corresponding code.
+Stage 0 is complete and verified from user-supplied execution evidence on 2026-11-02. Editable project installation succeeded, Ruff checking passed, Ruff formatting verification passed with 10 files formatted, pytest passed 5 tests in 0.13 seconds, and `scripts/check_database.py` succeeded.
+
+The verified SQL Server metadata was: server `CANVASIT`, login `sports_tracker_app`, database `SportsFixturesTracker`, edition `Standard Developer Edition (64-bit)`, and version `17.0.1000.7`. The local `.env` file is ignored by Git; no password or `.env` contents are recorded here.
+
+UCL ingestion and every later stage remain not started. There is not yet an ingestion, API, UI, scheduler, or database schema implementation.
+
+Competition settings remain configurable for future reuse through the OpenLigaDB shortcut, season, league ID, and matchday selection. The only currently planned competition is the UEFA Champions League 2026/27.
+
+## Stage 0 WSL setup
+
+Run these commands in WSL Bash from `/mnt/f/sports-fixtures-change-tracker` after reviewing the local prerequisites:
+
+```bash
+cd /mnt/f/sports-fixtures-change-tracker
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+if [ ! -f .env ]; then cp .env.example .env; fi
+```
+
+Edit `.env` locally. Set `SQL_SERVER_HOST` to the current Windows host address visible from WSL, keep port `1433`, and enter the SQL login password only in this ignored local file. The currently reported address is `172.20.80.1`; it can change after a WSL or network restart. To inspect the current candidate address:
+
+```bash
+WIN_HOST_IP="$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf)"
+printf 'Use SQL_SERVER_HOST=%s\n' "$WIN_HOST_IP"
+```
+
+After the local `.env` is complete, run the checks separately:
+
+```bash
+python -m pytest
+ruff check .
+python scripts/check_database.py
+```
+
+The first check covers offline configuration tests. The database script runs one read-only metadata query and must print only connection metadata, never the password or complete connection string. These checks were verified manually on 2026-11-02 with the results recorded above; they establish Stage 0 only.
