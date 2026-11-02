@@ -32,7 +32,7 @@ Reference endpoints:
 - [API documentation](https://api.openligadb.de/index.html)
 - [OpenAPI specification](https://api.openligadb.de/swagger/v1/swagger.json)
 
-Read access does not require an API key. The documented limit is 60 requests per minute per IP. The collector will use the provider's last-change endpoint to avoid repeatedly downloading unchanged matchdays.
+Read access does not require an API key. The documented limit is 60 requests per minute per IP. Stage 1 fetches only one explicitly requested matchday and does not schedule or poll; do not use aggressive polling or exceed the provider's limit.
 
 OpenLigaDB data is provided under [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). Attribution and the applicable data-sharing requirements must accompany any published data extracts. A code license does not replace the data license.
 
@@ -116,7 +116,11 @@ Stage 0 is complete and verified from user-supplied execution evidence on 2026-1
 
 The verified SQL Server metadata was: server `CANVASIT`, login `sports_tracker_app`, database `SportsFixturesTracker`, edition `Standard Developer Edition (64-bit)`, and version `17.0.1000.7`. The local `.env` file is ignored by Git; no password or `.env` contents are recorded here.
 
-UCL ingestion and every later stage remain not started. There is not yet an ingestion, API, UI, scheduler, or database schema implementation.
+Stage 1 source retrieval and raw snapshot code is implemented but NOT RUN. No live source request or raw snapshot has been verified. Later transformation, ingestion, API, UI, scheduler, and database schema stages remain not started.
+
+## Stage 1 source retrieval
+
+The reusable OpenLigaDB client targets the configured UEFA Champions League 2026/27 source: shortcut `ucl`, season `2026`, expected league ID `4946`, and endpoint `/getmatchdata/ucl/2026/{matchday}`. It validates only the basic source identity contract, preserves successful response bytes as `response.json`, and writes `metadata.json` with provenance, retrieval, HTTP, size, and SHA-256 fields. No transformation or repeated polling is included.
 
 Competition settings remain configurable for future reuse through the OpenLigaDB shortcut, season, league ID, and matchday selection. The only currently planned competition is the UEFA Champions League 2026/27.
 
@@ -147,3 +151,12 @@ python scripts/check_database.py
 ```
 
 The first check covers offline configuration tests. The database script runs one read-only metadata query and must print only connection metadata, never the password or complete connection string. These checks were verified manually on 2026-11-02 with the results recorded above; they establish Stage 0 only.
+
+After the Stage 0 checks, run each initial UCL capture separately when ready:
+
+```bash
+python scripts/fetch_openligadb.py --matchday 3
+python scripts/fetch_openligadb.py --matchday 4
+```
+
+These commands contact OpenLigaDB and remain NOT RUN for Stage 1. Expect a match count, snapshot location, SHA-256 hash, and concise success message. Stop on the first failure and return only non-secret output. Do not poll aggressively; respect the provider's 60-requests-per-minute-per-IP limit.

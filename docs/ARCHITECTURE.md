@@ -1,6 +1,6 @@
 # Architecture
 
-Status: proposed application design. The Stage 0 configuration and connection foundation is implemented in code but has not been executed or verified by Codex. Source capture, schema, import, API, interface, and scheduling remain proposals.
+Status: Stage 0 is complete and Stage 1 source retrieval/raw snapshot capture was manually verified from user-supplied evidence on 2026-11-02. It has not been committed or pushed. Schema, SQL loading, change tracking, API, interface, and scheduling remain proposals.
 
 ## Purpose and scope
 
@@ -20,6 +20,10 @@ The application is a local portfolio project. It does not claim an existing cust
 No database tables, migrations, ingestion, API, UI, or scheduler are implemented in Stage 0.
 
 Competition selection must remain configurable through the OpenLigaDB shortcut, season, league ID, and matchday selection so the architecture can support future competitions. Only the UEFA Champions League 2026/27 is currently planned; this configurability does not imply that other competitions or ingestion are implemented.
+
+## Implemented Stage 1 foundation
+
+Stage 1 source retrieval and raw snapshot code is implemented and was manually verified from user-supplied evidence on 2026-11-02; it has not been committed or pushed. The HTTPX client fetches one explicitly requested matchday, applies only basic source-identity checks, and raises descriptive custom errors for network, HTTP, empty-body, and invalid-JSON failures. The snapshot writer preserves exact response bytes and writes provenance metadata with a UTC retrieval time, HTTP status, content type, byte count, and SHA-256 hash in a timestamp/hash directory without overwriting an existing snapshot. Scheduling and repeated polling are intentionally excluded and remain NOT RUN.
 
 ## Components
 
@@ -44,9 +48,19 @@ Consult current official documentation during Stage 1:
 
 OpenLigaDB is community-maintained. Verify field meanings, result metadata, request limits, attribution, and applicable data-license requirements before implementing source behavior.
 
-Preserve missing scores on unfinished records. Do not invent detailed match states from a finished flag alone. Use explicit UTC kickoff data where supplied; preserve uncertainty in source timestamps without offsets.
+Preserve missing scores on unfinished records as `NULL`; never convert missing future results to zero. Interpret result entries explicitly by `resultType`, including `HalfTime` and `After90Minutes`, and do not choose a score from an undifferentiated result list or infer a detailed state from a finished flag alone. Use explicit UTC kickoff data where supplied; preserve uncertainty in source timestamps without offsets.
 
 A captured response should retain the request details, retrieval time, HTTP status, content hash, and complete source body. Keep captured data outside Git by default.
+
+## Planned engineering evaluation
+
+The following evaluations are planned for later SQL loading and change-tracking stages. All remain NOT RUN:
+
+- **Idempotency:** replay an identical snapshot and verify no duplicate current rows, observed changes, or checkpoint updates.
+- **Change-detection accuracy:** compare controlled fixture variants and unchanged replays, measuring false positives and false negatives while interpreting result types explicitly.
+- **Transaction rollback:** inject a SQL Server batch failure and verify current records, change history, and successful checkpoints are not partially committed.
+- **Incremental request efficiency:** measure request counts for active matchdays and later refreshes while respecting OpenLigaDB's 60-requests-per-minute limit and avoiding aggressive polling.
+- **Snapshot replay:** replay saved response bytes offline and verify hash, provenance, and deterministic downstream results without a network request.
 
 ## Proposed relational model
 

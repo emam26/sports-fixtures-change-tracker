@@ -24,7 +24,7 @@ They establish environment details only. Results are recorded in BUILD_PLAN.md. 
 
 ## Stage 0 foundation verification
 
-Status: Stage 0 is complete and verified from user-supplied manual execution evidence on 2026-11-02. Codex did not execute the commands. UCL ingestion and every later stage remain not started.
+Status: Stage 0 is complete and verified from user-supplied manual execution evidence on 2026-11-02. Codex did not execute the commands. SQL loading/ingestion and every later stage remain not started; Stage 1 retrieval and raw snapshot capture are covered by the separate verification record below.
 
 ### WSL Bash, project environment
 
@@ -76,6 +76,89 @@ python scripts/check_database.py
 
 Verified result on 2026-11-02: `scripts/check_database.py` succeeded and reported server `CANVASIT`, login `sports_tracker_app`, database `SportsFixturesTracker`, edition `Standard Developer Edition (64-bit)`, and version `17.0.1000.7`. The script runs a read-only metadata query and did not record or display the password or complete connection string.
 
+## Stage 1 OpenLigaDB retrieval and raw snapshots
+
+Status: Stage 1 code is implemented and manually verified from user-supplied evidence on 2026-11-02. Codex did not execute the live requests or verification, and Stage 1 has not been committed or pushed.
+
+Source scope: UEFA Champions League 2026/27; OpenLigaDB shortcut `ucl`; season `2026`; expected league ID `4946`; initial Matchdays 3 and 4. The endpoint is `/getmatchdata/ucl/2026/{matchday}` under `https://api.openligadb.de`.
+
+The source client uses an explicit timeout and descriptive User-Agent, validates only the top-level list, `matchID`, shortcut, season, and league ID, and does not schedule or poll. Successful responses are preserved byte-for-byte as `response.json`; `metadata.json` records provider, URL, source identity, retrieval UTC time, HTTP status, content type, byte count, and SHA-256. Snapshot directories include a UTC timestamp and full hash, and existing snapshots are never overwritten.
+
+### WSL Bash, Stage 1 prerequisites
+
+Working directory: `/mnt/f/sports-fixtures-change-tracker`; use the active `.venv`.
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest
+ruff check .
+ruff format --check .
+```
+
+Expected result: HTTPX is installed, the isolated tests pass, Ruff reports no errors, and formatting is clean. The user-supplied results are recorded below; Codex did not run these checks. Stop on the first failure and return only non-secret output.
+
+### WSL Bash, initial UCL captures
+
+Working directory: `/mnt/f/sports-fixtures-change-tracker`; use the local `.env` and active `.venv`. Ensure the source settings identify `ucl`, season `2026`, league ID `4946`, and `data/raw` before making a request.
+
+Run each command separately:
+
+```bash
+python scripts/fetch_openligadb.py --matchday 3
+python scripts/fetch_openligadb.py --matchday 4
+```
+
+Expected result: each command prints a match count, snapshot location, SHA-256 hash, and concise success message. The raw files should be under the configured `data/raw` directory. The user-supplied results for these live commands are recorded below; Codex did not run them. Stop after the first failure and return only non-secret output.
+
+OpenLigaDB read access is documented as limited to 60 requests per minute per IP. Do not use aggressive polling, add scheduling, or repeat requests beyond what is needed for the explicitly selected matchday captures.
+
+## Stage 1 manual verification record — 2026-11-02
+
+This record contains user-supplied evidence. It was not executed by Codex, and Stage 1 has not been committed or pushed.
+
+From WSL Bash, in the repository root, the reproducible command set is:
+
+```bash
+cd /mnt/f/sports-fixtures-change-tracker
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+python -m pytest
+ruff check .
+ruff format --check .
+python scripts/fetch_openligadb.py --matchday 3
+python scripts/fetch_openligadb.py --matchday 3
+python scripts/fetch_openligadb.py --matchday 4
+```
+
+Observed results supplied for the 2026-11-02 handoff:
+
+- Editable installation succeeded.
+- Ruff lint passed.
+- Ruff format checking passed with 14 files formatted.
+- pytest passed 15 tests in 0.50 seconds.
+- The source was curated UEFA Champions League 2026/27 (`ucl`, season `2026`, expected League ID `4946`).
+- Matchday 3 returned 18 matches: all 18 were completed, all had results, and all 18 match IDs were unique. The response was 76,432 bytes with SHA-256 `88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348`.
+- Two Matchday 3 snapshots were preserved at 09:47 and 10:24 UTC, with identical content hashes.
+- Matchday 4 returned 18 matches: all 18 were unfinished, all had empty `matchResults` arrays, and all 18 match IDs were unique. The response was 53,969 bytes with SHA-256 `a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245`.
+- The two matchdays contained 36 unique match IDs. Saved real responses confirmed completed and future-match shapes and included `HalfTime` and `After90Minutes` result types.
+- Raw response and metadata files are preserved under `data/raw/`, and `data/raw/` is Git-ignored. Do not add raw snapshot files, `.env`, `.env` contents, or passwords to Git.
+
+Future or unfinished matches must keep scores as `NULL`; missing results must never be converted to zero. Interpret result entries explicitly by `resultType`, including `HalfTime` and `After90Minutes`, rather than choosing a score from an undifferentiated result list.
+
+The OpenLigaDB read limit is 60 requests per minute per IP. Do not use aggressive polling. Stage 1 fetches one requested matchday only and does not implement scheduling or repeated polling.
+
+## Planned engineering evaluations — NOT RUN
+
+These evaluations are planned for later SQL loading and change-tracking stages:
+
+- **Idempotency:** replay an identical snapshot and verify no duplicate current rows, observed changes, or checkpoint updates.
+- **Change-detection accuracy:** compare controlled fixture variants and unchanged replays, measuring false positives and false negatives while interpreting result types explicitly.
+- **Transaction rollback:** inject a SQL Server batch failure and verify current records, change history, and successful checkpoints are not partially committed.
+- **Incremental request efficiency:** measure request counts for active matchdays and later refreshes while respecting the 60-requests-per-minute limit.
+- **Snapshot replay:** replay saved response bytes offline and verify hash, provenance, and deterministic downstream results without a network request.
+
+All five evaluations remain NOT RUN. SQL loading, change tracking, retries, recovery, API/UI work, and scheduling are also NOT RUN.
+
 ## Required format for future procedures
 
 Every procedure must identify:
@@ -107,17 +190,19 @@ SQL intended for a query window must be labeled as SQL, with its target database
 
 ## Source capture, imports, and replay
 
-Status: not implemented or verified.
+Status: Stage 1 retrieval and raw snapshot capture are implemented and manually verified from user-supplied evidence on 2026-11-02. Codex did not execute the verification. SQL loading, transformation, import, change tracking, retries, rollback, recovery, replay, and later source workflows remain NOT RUN.
 
 Current planned source scope: UEFA Champions League 2026/27 through OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`. Begin with Matchdays 3 and 4, then expand to all 144 league-phase fixtures and later knockout fixtures. No ingestion is complete or verified.
 
-After Stages 1–3, document commands to capture UCL Matchdays 3 and 4, inspect provenance, validate, import, repeat unchanged input, inspect issues, and retry or replay an eligible failed input.
+Stage 1 capture commands and observed outputs are recorded above. After Stages 2–3, document commands to inspect provenance, validate, import, repeat unchanged input, inspect issues, and retry or replay an eligible failed input.
 
 Document the selected data scope and where raw responses and logs are retained. Keep controlled test changes separate from real collected data.
 
 ## Tests
 
-Status: focused configuration tests passed on 2026-11-02: 5 tests in 0.13 seconds. This verifies Stage 0 configuration behavior only.
+Current status: the user reported that the complete test suite passed 15 tests in 0.50 seconds on 2026-11-02. This is user-supplied evidence; Codex did not run the tests. Any earlier pre-verification note stating that the Stage 1 tests were NOT RUN is historical and superseded by that report.
+
+Status: focused Stage 0 configuration tests were reported as passed on 2026-11-02: 5 tests in 0.13 seconds. The complete suite was subsequently reported as passed: 15 tests in 0.50 seconds. These are user-supplied results; Codex did not run the tests.
 
 Run `python -m pytest` from the active WSL virtual environment for the offline configuration tests. Keep separate procedures for SQL Server integration tests, live-source checks, API requests, browser checks, and scheduled-run checks.
 

@@ -6,6 +6,7 @@ Prepared: 2026-10-25. These starter documents were prepared outside the user's c
 
 ## Current stage
 
+Stage 1 — OpenLigaDB source retrieval and raw snapshot capture. Implemented and manually verified on 2026-11-02; not committed or pushed.
 Stage 0 — setup and planning. Complete and verified on 2026-11-02.
 
 Confirmed from user-reported command output on 2026-11-01:
@@ -30,7 +31,8 @@ Implemented in this checkout:
 - Focused offline configuration tests and basic pytest/Ruff configuration.
 
 Unconfirmed or NOT RUN:
-- No import, schema, API, UI, scheduler, or live-source checks have been performed.
+- No SQL import, schema, API, UI, or scheduler checks have been performed. Live OpenLigaDB retrieval and raw snapshot capture are covered by the Stage 1 evidence below.
+- SQL loading, change tracking, retries, rollback, recovery, API, UI, scheduling, and later-stage evaluations remain NOT RUN.
 - `docs/PROJECT_ROADMAP.md` is referenced by `AGENTS.md` but is absent from this checkout.
 
 Current planned scope:
@@ -40,7 +42,30 @@ Current planned scope:
 - League ID: `4946`.
 - Initial scope: Matchdays 3 and 4.
 - Expansion scope: all 144 league-phase fixtures, followed by later knockout fixtures.
-- Ingestion is not complete or verified.
+- SQL ingestion is not complete or verified; Stage 1 source retrieval and raw snapshot capture are verified separately below.
+
+Stage 1 implementation in this checkout:
+- HTTPX runtime dependency and source configuration for the OpenLigaDB base URL, shortcut, season, league ID, timeout, and raw directory.
+- Reusable client for one requested matchday with explicit timeout, descriptive User-Agent, safe URL construction, custom network/HTTP/body/JSON errors, and basic identity checks.
+- Immutable raw snapshot writer for exact response bytes and provenance metadata, using timestamp/hash directories and no-overwrite behavior.
+- `scripts/fetch_openligadb.py` with required `--matchday` and concise success/error output.
+- Isolated MockTransport tests for endpoint construction, snapshots, hashing, no-overwrite behavior, invalid JSON, identity failure, and HTTP failure.
+
+Verified Stage 1 evidence supplied by the user on 2026-11-02:
+- Editable installation completed successfully.
+- Ruff lint passed.
+- Ruff format check passed: 14 files formatted.
+- pytest passed: 15 tests in 0.50 seconds.
+- Source: curated UEFA Champions League 2026/27; shortcut `ucl`; season `2026`; expected League ID `4946`.
+- Matchday 3: 18 matches; all 18 completed; all had results; 18 unique match IDs; 76,432 response bytes.
+- Matchday 3 SHA-256: `88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348`.
+- Two preserved Matchday 3 snapshots were captured at 09:47 and 10:24 UTC on 2026-11-02 with identical content hashes.
+- Matchday 4: 18 matches; all 18 unfinished; all had empty `matchResults` arrays; 18 unique match IDs; 53,969 response bytes.
+- Matchday 4 SHA-256: `a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245`.
+- The two matchdays contained 36 unique match IDs in total.
+- Raw response and metadata files are preserved under `data/raw/`, which is Git-ignored.
+- Completed and future match data shapes were verified against saved real API responses; result types included `HalfTime` and `After90Minutes`.
+- No password, `.env` contents, or raw snapshot files are recorded in Git or this document.
 
 Verified Stage 0 evidence supplied by the user on 2026-11-02:
 - Editable project installation succeeded.
@@ -61,7 +86,7 @@ Verified Stage 0 evidence supplied by the user on 2026-11-02:
 | Stage | Deliverable | Completion evidence | Status |
 | --- | --- | --- | --- |
 | 0 | Environment, SQL connection, instructions, plan | Dedicated interpreter and successful connection query | Complete and verified (2026-11-02) |
-| 1 | Real UCL matchday capture and validated source contract | Capture manifest and passing offline checks | Not started |
+| 1 | Real UCL matchday capture and validated source contract | Capture manifest and passing offline checks | Implemented; manually verified 2026-11-02; not committed or pushed |
 | 2 | SQL schema and repeatable first import | Reconciliation and duplicate-free rerun | Not started |
 | 3 | Observed changes, recovery, incremental UCL league-phase and knockout imports | Controlled change, rollback, retry, and reconciliation | Not started |
 | 4 | FastAPI and local notes CRUD | Normal, missing, and invalid request checks | Not started |
@@ -92,7 +117,26 @@ These results were supplied by the user; they were not independently executed by
 | E015 | `scripts/check_database.py` | Succeeded; CANVASIT; sports_tracker_app; SportsFixturesTracker; Standard Developer Edition (64-bit); 17.0.1000.7 | User-reported read-only SQL Server check evidence |
 | E016 | `.env` ignore rule | `.env` is ignored by Git | User-reported ignore-rule evidence |
 
-Treat E005–E016 as Stage 0 evidence only; they do not verify UCL ingestion or later stages. Keep large logs local; record concise relevant results without secrets.
+| E017 | Stage 1 installation and quality checks | Editable installation succeeded; Ruff lint passed; Ruff format check passed with 14 files formatted; pytest passed 15 tests in 0.50 seconds | User-reported Stage 1 verification evidence |
+| E018 | Matchday 3 source capture | 18 completed matches; results present; 18 unique IDs; 76,432 bytes; SHA-256 `88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348` | User-reported saved-response evidence |
+| E019 | Matchday 3 repeat snapshot | Snapshots at 09:47 and 10:24 UTC on 2026-11-02; identical content hashes | User-reported preservation and repeat-capture evidence |
+| E020 | Matchday 4 source capture | 18 unfinished matches; empty `matchResults` arrays; 18 unique IDs; 53,969 bytes; SHA-256 `a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245` | User-reported saved-response evidence |
+| E021 | Cross-matchday identity and result shapes | 36 unique IDs; completed/future shapes verified; `HalfTime` and `After90Minutes` result types observed | User-reported source-contract evidence |
+| E022 | Raw-data ignore boundary | Responses and metadata under `data/raw/`; `data/raw/` Git-ignored | User-reported repository-boundary evidence |
+
+Treat E005–E016 as Stage 0 evidence and E017–E022 as Stage 1 evidence only; they do not verify SQL loading or later stages. Keep large logs and raw snapshots local; record concise relevant results without secrets.
+
+## Planned engineering evaluation for later stages
+
+These evaluations are planned and remain NOT RUN. They belong to the SQL loading and change-tracking stages, not to the current Stage 1 retrieval implementation:
+
+- **Idempotency:** replay an identical saved snapshot and verify that it creates no duplicate current rows, observed-change rows, or checkpoint updates.
+- **Change-detection accuracy:** use controlled fixture variants and saved source snapshots to measure true changes, unchanged replays, false positives, and false negatives. Result types, including `HalfTime` and `After90Minutes`, must be interpreted explicitly.
+- **Transaction rollback:** inject a failure during a SQL Server batch and verify that current records, change history, and successful checkpoints are not left partially committed.
+- **Incremental request efficiency:** measure requests needed for the active matchdays and later incremental refreshes, while remaining below OpenLigaDB's 60-requests-per-minute limit and avoiding aggressive polling.
+- **Snapshot replay:** replay preserved response bytes offline and verify the recorded hash, provenance, and deterministic downstream outcome without contacting OpenLigaDB.
+
+Future or unfinished matches must retain `NULL` scores. Missing results must never be converted to zero, and a result must not be selected without checking its explicit result type.
 
 ## Decisions
 
@@ -107,15 +151,39 @@ Treat E005–E016 as Stage 0 evidence only; they do not verify UCL ingestion or 
 | SQL Server host, auth, and driver | User evidence supplied | CANVASIT, SportsFixturesTracker, sports_tracker_app, TCP 172.20.80.1:1433, and ODBC Driver 18 are recorded; the permanent project check remains NOT RUN |
 | Scheduler | Unresolved | Deferred until the import is reliable |
 
-## Verification handoff - 2026-11-02
+## Stage 0 verification handoff - 2026-11-02
 
-- Stage and status: Stage 0 complete and verified; UCL ingestion and every later stage remain not started.
-- Files changed: `.gitignore`, `README.md`, `docs/BUILD_PLAN.md`, and `docs/MANUAL_RUNBOOK.md`.
-- Implemented behavior: recorded the successful editable installation, Ruff checks, pytest result, read-only database check, SQL Server metadata, and `.env` ignore evidence without any password or `.env` contents.
-- Checks and supplied evidence: editable installation succeeded; Ruff check passed; Ruff formatting check passed with 10 files formatted; pytest passed 5 tests in 0.13 seconds; `scripts/check_database.py` succeeded against the recorded server, login, database, edition, and version.
-- Checks NOT RUN: UCL ingestion, source/API calls, schema work, imports, API, UI, scheduling, and all later-stage verification.
-- Failure or blocker: no Stage 0 blocker remains; `docs/PROJECT_ROADMAP.md` remains absent as previously recorded.
-- Exact next step: begin Stage 1 for UCL Matchdays 3 and 4 only when ready; do not treat the Stage 0 evidence as ingestion evidence.
+This historical Stage 0 handoff is superseded by the Stage 1 verification handoff below. Stage 0 remains complete and verified: editable installation succeeded; Ruff lint passed; Ruff format checking passed with 10 files formatted; pytest passed 5 tests in 0.13 seconds; `scripts/check_database.py` succeeded; and `.env` is Git-ignored. No password or `.env` contents are recorded. The permanent current status is Stage 1 implemented and manually verified, with SQL loading and every later stage still not started.
+
+## Stage 1 verification handoff - 2026-11-02
+
+Stage 1 was implemented and manually verified by the user on 2026-11-02. It has not been committed or pushed. The following commands are the reproducible manual verification set; they were not executed by Codex in this handoff:
+
+```bash
+cd /mnt/f/sports-fixtures-change-tracker
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+python -m pytest
+ruff check .
+ruff format --check .
+python scripts/fetch_openligadb.py --matchday 3
+python scripts/fetch_openligadb.py --matchday 3
+python scripts/fetch_openligadb.py --matchday 4
+```
+
+The user reported that editable installation succeeded, Ruff lint passed, Ruff format checking passed with 14 files formatted, and pytest passed 15 tests in 0.50 seconds. The two Matchday 3 fetches preserved snapshots captured at 09:47 and 10:24 UTC with identical content hashes. Matchday 3 produced 18 completed matches with results, 18 unique IDs, 76,432 response bytes, and SHA-256 `88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348`. Matchday 4 produced 18 unfinished matches with empty `matchResults` arrays, 18 unique IDs, 53,969 response bytes, and SHA-256 `a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245`. There were 36 unique match IDs across both matchdays.
+
+The saved real responses confirmed completed and future-match data shapes, including `HalfTime` and `After90Minutes` result types. Raw response and metadata files are preserved under `data/raw/`, which is Git-ignored. No password, `.env` content, or raw snapshot contents are recorded here.
+
+SQL loading, schema creation, change tracking, retries, recovery, API/UI work, scheduling, and the engineering evaluations above remain NOT RUN and are not part of Stage 1.
+
+## Stage 1 implementation record - 2026-11-02 (before manual verification)
+
+- Stage and status: This was the pre-verification implementation record. It is superseded by the Stage 1 verification handoff above; Stage 1 is now manually verified from user-supplied evidence.
+- Files changed: `pyproject.toml`, `.env.example`, `.gitignore`, `src/sports_tracker/__init__.py`, `src/sports_tracker/config.py`, `src/sports_tracker/openligadb.py`, `src/sports_tracker/snapshots.py`, `scripts/fetch_openligadb.py`, `tests/test_config.py`, and `tests/test_openligadb.py`, plus the Stage 1 documentation updates.
+- Implemented behavior: one-request OpenLigaDB client, basic UCL identity checks, exact response-byte capture, metadata with SHA-256 and provenance, timestamp/hash snapshot directories, no-overwrite protection, safe CLI errors, and isolated MockTransport tests.
+- Checks at the time of this record: editable installation, tests, Ruff checks, real UCL requests, and provider snapshot creation were still pending. The later user-supplied verification record supersedes that pending status.
+- Current blocker and next step: no Stage 1 implementation blocker is known. The next stage is SQL Server schema/loading design; do not begin later stages until that plan is reviewed.
 
 ## Previous handoff - 2026-11-01
 
@@ -131,20 +199,25 @@ Treat E005–E016 as Stage 0 evidence only; they do not verify UCL ingestion or 
 
 ## Scope update handoff - 2026-11-01
 
-- Stage and status: Stage 0 foundation remains implemented; competition scope is now UCL-only and ingestion remains NOT RUN.
+- Stage and status: This historical scope update established the UCL-only scope. Stage 0 remains complete, and the later Stage 1 verification handoff now records retrieval and raw snapshot capture as manually verified.
 - Files changed: `README.md`, `docs/ARCHITECTURE.md`, `docs/BUILD_PLAN.md`, and `docs/MANUAL_RUNBOOK.md`.
 - Implemented behavior: documentation now identifies UEFA Champions League 2026/27, OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`, Matchdays 3 and 4 as the starting scope, and expansion to all 144 league-phase fixtures plus later knockout fixtures.
 - Design constraint: competition shortcut, season, league ID, and matchday selection remain configurable for future reuse; no other competition is currently planned.
 - Checks and supplied evidence: read-only search confirmed that superseded competition names, shortcuts, and prior-season scope terms are absent from `README.md` and `docs/`.
-- Checks NOT RUN: all project code, tests, linters, API calls, database commands, imports, and scheduled runs.
+- Checks at the time of this scope update: all project code, tests, linters, API calls, database commands, imports, and scheduled runs were not yet verified. The later Stage 1 verification handoff records the subsequent user-supplied results.
 - Failure or blocker: none introduced by this documentation-only scope update. `AGENTS.md` was not modified because the requested edit scope excludes it.
 - Exact next step: review the UCL scope wording, then follow the existing manual verification handoff only when ready; do not treat this documentation update as ingestion evidence.
 
 ## Next manual handoff
 
+Stage 1 retrieval and raw snapshot capture are implemented and manually verified. The next stage is the SQL Server schema/loading design; it is not started. Keep all future execution manual and return only non-secret results. Do not paste `.env`, passwords, complete connection strings, raw response bodies, or raw snapshot files.
+
+## Previous manual handoff (superseded by user verification)
+
 1. Stage 0 verification is complete based on the user-supplied evidence above.
-2. Keep UCL ingestion and every later stage marked not started.
-3. When proceeding, begin Stage 1 with UCL Matchdays 3 and 4 only and return non-secret evidence after each manual prerequisite.
+2. Install the updated project so HTTPX is available, then rerun the offline tests and Ruff checks after this Stage 1 change.
+3. Run `python scripts/fetch_openligadb.py --matchday 3` and `python scripts/fetch_openligadb.py --matchday 4` separately with the local source settings.
+4. Return only non-secret output, including match count, snapshot location, hash, and errors if any. Do not start transformation or later stages.
 
 Do not install or reconfigure the database based only on an assumption that SSMS includes the engine.
 
