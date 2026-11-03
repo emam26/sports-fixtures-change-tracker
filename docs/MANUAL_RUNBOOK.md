@@ -78,7 +78,7 @@ Verified result on 2026-11-02: `scripts/check_database.py` succeeded and reporte
 
 ## Stage 1 OpenLigaDB retrieval and raw snapshots
 
-Status: Stage 1 code is implemented and manually verified from user-supplied evidence on 2026-11-02. Codex did not execute the live requests or verification, and Stage 1 has not been committed or pushed.
+Status: Stage 1 is complete, tested, documented, committed, and pushed according to the user's supplied status. Codex did not execute the live requests or verification in this handoff.
 
 Source scope: UEFA Champions League 2026/27; OpenLigaDB shortcut `ucl`; season `2026`; expected league ID `4946`; initial Matchdays 3 and 4. The endpoint is `/getmatchdata/ucl/2026/{matchday}` under `https://api.openligadb.de`.
 
@@ -114,7 +114,7 @@ OpenLigaDB read access is documented as limited to 60 requests per minute per IP
 
 ## Stage 1 manual verification record — 2026-11-02
 
-This record contains user-supplied evidence. It was not executed by Codex, and Stage 1 has not been committed or pushed.
+This record contains user-supplied evidence. It was not executed by Codex. Stage 1 is complete, tested, documented, committed, and pushed according to the user's supplied status.
 
 From WSL Bash, in the repository root, the reproducible command set is:
 
@@ -158,6 +158,97 @@ These evaluations are planned for later SQL loading and change-tracking stages:
 - **Snapshot replay:** replay saved response bytes offline and verify hash, provenance, and deterministic downstream results without a network request.
 
 All five evaluations remain NOT RUN. SQL loading, change tracking, retries, recovery, API/UI work, and scheduling are also NOT RUN.
+
+## Stage 2 SQL Server schema design
+
+Status: Stage 2 schema design is implemented in `sql/001_initial_schema.sql` but NOT RUN. The script has not been parsed, executed, deployed, or verified against SQL Server. It creates missing dbo objects only, does not drop or alter existing objects, and issues no permissions. Do not run it as `sports_tracker_app`; that runtime login is intentionally not a DDL administrator.
+
+The schema includes `competitions`, `competition_seasons`, `teams`, `matches`, `match_results`, `match_goals`, `import_runs`, `source_snapshots`, `validation_issues`, `match_changes`, `sync_checkpoints`, and `match_notes`. Raw response bytes remain on disk under Git-ignored `data/raw/`; `source_snapshots` stores metadata and paths only. Future matches retain no fabricated result rows or 0-0 scores. `HalfTime` and `After90Minutes` are distinct result types.
+
+### SSMS, preflight checks before applying the DDL
+
+Where: SSMS, connected with the administrative Windows Authentication session, using a query window whose target is the existing `SportsFixturesTracker` database. Do not paste passwords or `.env` contents into SSMS or chat.
+
+Run this read-only preflight query first:
+
+```sql
+USE [SportsFixturesTracker];
+GO
+
+SELECT
+    DB_NAME() AS database_name,
+    SUSER_SNAME() AS executing_login,
+    compatibility_level,
+    state_desc
+FROM sys.databases
+WHERE name = DB_NAME();
+
+SELECT
+    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CONNECT') AS can_connect,
+    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE TABLE') AS can_create_table,
+    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'ALTER') AS can_alter_database;
+
+SELECT
+    name AS existing_stage2_table
+FROM sys.tables
+WHERE schema_id = SCHEMA_ID(N'dbo')
+  AND name IN
+  (
+      N'competitions', N'competition_seasons', N'teams', N'matches',
+      N'match_results', N'match_goals', N'import_runs', N'source_snapshots',
+      N'validation_issues', N'match_changes', N'sync_checkpoints', N'match_notes'
+  )
+ORDER BY name;
+```
+
+Expected result: the database row shows `SportsFixturesTracker` and an online state; the first permission value is `1`; and the final query returns no rows unless a prior or unrelated schema already uses one of these names. If any named table already exists, stop and return only the table names for design review. If the session cannot connect or has no DDL capability, stop without running the schema.
+
+### SSMS, apply and verify the schema manually
+
+After the preflight is clean, open `sql/001_initial_schema.sql` in the same administrative SSMS session, confirm its first executable statement is `USE [SportsFixturesTracker]`, and execute the complete script as one batch sequence. Expected result: SSMS reports successful completion without an error; no data-loading rows are inserted.
+
+Then run this read-only structural check:
+
+```sql
+USE [SportsFixturesTracker];
+GO
+
+SELECT name AS table_name
+FROM sys.tables
+WHERE schema_id = SCHEMA_ID(N'dbo')
+  AND name IN
+  (
+      N'competitions', N'competition_seasons', N'teams', N'matches',
+      N'match_results', N'match_goals', N'import_runs', N'source_snapshots',
+      N'validation_issues', N'match_changes', N'sync_checkpoints', N'match_notes'
+  )
+ORDER BY name;
+
+SELECT
+    OBJECT_SCHEMA_NAME(parent_object_id) AS parent_schema,
+    OBJECT_NAME(parent_object_id) AS parent_table,
+    name AS foreign_key_name,
+    OBJECT_NAME(referenced_object_id) AS referenced_table,
+    is_disabled
+FROM sys.foreign_keys
+WHERE parent_object_id IN
+(
+    SELECT object_id
+    FROM sys.tables
+    WHERE schema_id = SCHEMA_ID(N'dbo')
+      AND name IN
+      (
+          N'competitions', N'competition_seasons', N'teams', N'matches',
+          N'match_results', N'match_goals', N'import_runs', N'source_snapshots',
+          N'validation_issues', N'match_changes', N'sync_checkpoints', N'match_notes'
+      )
+)
+ORDER BY parent_table, foreign_key_name;
+```
+
+Expected result: all twelve tables are listed, foreign keys are present and enabled, and no fixture or raw-response rows have been loaded. Return only the non-secret table and foreign-key output. Do not proceed to data loading; that belongs to a later stage.
+
+Planned Stage 2 verification checks, all NOT RUN, are: duplicate provider match identity rejection; orphan foreign-key rejection; NULL/missing results for upcoming fixtures without fabricated 0-0 rows; distinct `HalfTime` and `After90Minutes` result rows; provenance for identical snapshot hashes captured at different times; idempotent reimport without duplicate fixture state or changes; field-level historical change recording; and transaction rollback with checkpoint recovery plus a separately persisted failure diagnostic.
 
 ## Required format for future procedures
 

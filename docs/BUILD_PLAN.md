@@ -6,7 +6,8 @@ Prepared: 2026-10-25. These starter documents were prepared outside the user's c
 
 ## Current stage
 
-Stage 1 — OpenLigaDB source retrieval and raw snapshot capture. Implemented and manually verified on 2026-11-02; not committed or pushed.
+Stage 2 — Relational database schema design. Implemented in `sql/001_initial_schema.sql`; NOT RUN.
+Stage 1 — OpenLigaDB source retrieval and raw snapshot capture. Complete, tested, documented, committed, and pushed according to the user's supplied status.
 Stage 0 — setup and planning. Complete and verified on 2026-11-02.
 
 Confirmed from user-reported command output on 2026-11-01:
@@ -31,7 +32,7 @@ Implemented in this checkout:
 - Focused offline configuration tests and basic pytest/Ruff configuration.
 
 Unconfirmed or NOT RUN:
-- No SQL import, schema, API, UI, or scheduler checks have been performed. Live OpenLigaDB retrieval and raw snapshot capture are covered by the Stage 1 evidence below.
+- No SQL schema execution/import, API, UI, or scheduler checks have been performed. Live OpenLigaDB retrieval and raw snapshot capture are covered by the Stage 1 evidence below; the Stage 2 DDL is implemented but unapplied.
 - SQL loading, change tracking, retries, rollback, recovery, API, UI, scheduling, and later-stage evaluations remain NOT RUN.
 - `docs/PROJECT_ROADMAP.md` is referenced by `AGENTS.md` but is absent from this checkout.
 
@@ -86,8 +87,8 @@ Verified Stage 0 evidence supplied by the user on 2026-11-02:
 | Stage | Deliverable | Completion evidence | Status |
 | --- | --- | --- | --- |
 | 0 | Environment, SQL connection, instructions, plan | Dedicated interpreter and successful connection query | Complete and verified (2026-11-02) |
-| 1 | Real UCL matchday capture and validated source contract | Capture manifest and passing offline checks | Implemented; manually verified 2026-11-02; not committed or pushed |
-| 2 | SQL schema and repeatable first import | Reconciliation and duplicate-free rerun | Not started |
+| 1 | Real UCL matchday capture and validated source contract | Capture manifest and passing offline checks | Complete, tested, documented, committed, and pushed (user-supplied status) |
+| 2 | SQL schema and repeatable first import | Reviewed/applied schema, reconciliation, and duplicate-free rerun | Schema implemented; NOT RUN; first import not started |
 | 3 | Observed changes, recovery, incremental UCL league-phase and knockout imports | Controlled change, rollback, retry, and reconciliation | Not started |
 | 4 | FastAPI and local notes CRUD | Normal, missing, and invalid request checks | Not started |
 | 5 | HTML/CSS/JavaScript interface | Browser review and notes workflow | Not started |
@@ -149,15 +150,30 @@ Future or unfinished matches must retain `NULL` scores. Missing results must nev
 | Configurable competition parameters | Required design constraint | Keep shortcut, season, league ID, and matchday selection reusable while the current scope remains UCL-only |
 | All-or-nothing current-record update per matchday | Proposed for implementation | Avoids partially applied invalid batches |
 | SQL Server host, auth, and driver | User evidence supplied | CANVASIT, SportsFixturesTracker, sports_tracker_app, TCP 172.20.80.1:1433, and ODBC Driver 18 are recorded; the permanent project check remains NOT RUN |
+| Stage 2 DDL execution | Manual only | `sql/001_initial_schema.sql` is implemented with no destructive statements or permission grants; deployment and verification remain NOT RUN |
+| Raw response storage | Filesystem plus relational metadata | Original response bytes remain under Git-ignored `data/raw/`; SQL Server stores provenance, hashes, sizes, and paths |
+| Source update timezone | Preserve uncertainty | `matchDateTimeUTC` maps to UTC; offset-free `lastUpdateDateTime` is retained as raw text until its timezone semantics are verified |
 | Scheduler | Unresolved | Deferred until the import is reliable |
 
 ## Stage 0 verification handoff - 2026-11-02
 
-This historical Stage 0 handoff is superseded by the Stage 1 verification handoff below. Stage 0 remains complete and verified: editable installation succeeded; Ruff lint passed; Ruff format checking passed with 10 files formatted; pytest passed 5 tests in 0.13 seconds; `scripts/check_database.py` succeeded; and `.env` is Git-ignored. No password or `.env` contents are recorded. The permanent current status is Stage 1 implemented and manually verified, with SQL loading and every later stage still not started.
+This historical Stage 0 handoff is superseded by the Stage 2 implementation and verification handoffs below. Stage 0 remains complete and verified: editable installation succeeded; Ruff lint passed; Ruff format checking passed with 10 files formatted; pytest passed 5 tests in 0.13 seconds; `scripts/check_database.py` succeeded; and `.env` is Git-ignored. No password or `.env` contents are recorded. The current status is Stage 2 schema design implemented but NOT RUN; SQL loading and every later stage remain unstarted.
+
+## Stage 2 implementation handoff - 2026-11-02
+
+- Stage and status: Stage 2 relational schema design is implemented in `sql/001_initial_schema.sql` but NOT RUN. Stage 1 is complete, tested, documented, committed, and pushed according to the user's supplied status.
+- Tables: `competitions`, `competition_seasons`, `teams`, `matches`, `match_results`, `match_goals`, `import_runs`, `source_snapshots`, `validation_issues`, `match_changes`, `sync_checkpoints`, and `match_notes`.
+- Implemented behavior: guarded dbo-scoped creation, explicit database context, transactional error handling, primary/foreign keys, source identity constraints, snapshot provenance metadata, result-type separation, nullable future results, replay/change-history support, checkpoint references, and targeted indexes. No raw response bytes are copied into SQL Server.
+- Source-shape decision: saved snapshots were inspected. The observed `goals` structure is represented in `match_goals`; `lastUpdateDateTime` is preserved as raw text unless its timezone is verified rather than being silently treated as UTC.
+- Checks NOT RUN: SQL parsing or execution, deployment, permissions, table inspection, test-data loading, imports, idempotency checks, rollback checks, checkpoint recovery, and all later stages.
+- Failure or blocker: no implementation blocker is known. Existing objects with the same names are not altered or reconciled by the rerun guards.
+- Exact next step: perform the documented SSMS preflight checks as an administrator, then review and execute the script manually if the preflight is clean. Do not use the runtime login for DDL.
+
+Planned Stage 2 verification remains NOT RUN: confirm unique provider match identity; reject orphan foreign keys; preserve NULL/missing results for upcoming fixtures; distinguish `HalfTime` and `After90Minutes`; preserve snapshot provenance for identical hashes at different retrieval times; support idempotent reimport without duplicate state or changes; record field-level historical changes; and verify transaction rollback with checkpoint recovery and a separately persisted failure record.
 
 ## Stage 1 verification handoff - 2026-11-02
 
-Stage 1 was implemented and manually verified by the user on 2026-11-02. It has not been committed or pushed. The following commands are the reproducible manual verification set; they were not executed by Codex in this handoff:
+Stage 1 was implemented, tested, documented, committed, and pushed according to the user's supplied status. The following commands are the reproducible manual verification set; they were not executed by Codex in this handoff:
 
 ```bash
 cd /mnt/f/sports-fixtures-change-tracker
@@ -210,7 +226,7 @@ SQL loading, schema creation, change tracking, retries, recovery, API/UI work, s
 
 ## Next manual handoff
 
-Stage 1 retrieval and raw snapshot capture are implemented and manually verified. The next stage is the SQL Server schema/loading design; it is not started. Keep all future execution manual and return only non-secret results. Do not paste `.env`, passwords, complete connection strings, raw response bodies, or raw snapshot files.
+Stage 2 schema design is implemented in `sql/001_initial_schema.sql` but NOT RUN. Before applying it, perform the documented SSMS preflight checks against `SportsFixturesTracker` using the administrative Windows-authenticated SSMS session. Keep all execution manual and return only non-secret results. Do not paste `.env`, passwords, complete connection strings, raw response bodies, or raw snapshot files.
 
 ## Previous manual handoff (superseded by user verification)
 
