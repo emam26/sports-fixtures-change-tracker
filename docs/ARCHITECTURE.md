@@ -1,172 +1,210 @@
 # Architecture
 
-Status: Stage 0 is complete. Stage 1 is complete, tested, documented, committed, and pushed according to the user's supplied status. Stage 2 schema design is implemented in `sql/001_initial_schema.sql` but NOT RUN; SQL loading, change tracking, API, interface, and scheduling remain unimplemented.
+## Implemented Stage 3–10 architecture — verification pending
 
-## Purpose and scope
+This section describes code in the working tree. Every new component remains
+**NOT RUN** after the 2026-11-03 edits.
 
-Collect real football fixtures/results, preserve source evidence, validate and store current records in SQL Server, record observed changes, and provide a local review interface.
+```text
+OpenLigaDB documented endpoints
+  -> bounded client and conservative last-change check
+  -> immutable response.json + metadata.json under ignored data/raw/
+  -> typed offline parser and source validation
+  -> one SQL Server transaction
+       provenance + current state + field changes + checkpoint
+  -> parameterized FastAPI query layer on 127.0.0.1
+  -> plain HTML/CSS/JavaScript dashboard
+```
 
-The current competition scope is the UEFA Champions League 2026/27: OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`. Start with Matchdays 3 and 4, then expand to all 144 league-phase fixtures and later knockout fixtures after repeatable import and recovery checks pass.
+`response.json` is evidentiary and is never rewritten. SQL Server owns normalized
+current state, observations, validation issues, import outcomes, and checkpoints.
+`dbo.match_notes` is application-owned and separate from source-owned fixture and
+result fields.
 
-The application is a local portfolio project. It does not claim an existing customer, production deployment, or continuous operation while the user's computer is off.
+### Import semantics
 
-## Implemented Stage 0 foundation
+Provider IDs determine identity. A new match establishes a baseline and does not
+fabricate earlier history. A later distinct observation creates one structured
+record per changed field. Replaying unchanged content may add provenance but must
+not duplicate domain rows or create false changes.
 
-- `pyproject.toml` defines the Python package, runtime dependencies, development tools, pytest configuration, and Ruff configuration.
-- `sports_tracker.config` loads local `.env` values, validates SQL Server settings, and builds an ODBC Driver 18 connection string with brace-quoted values and escaped closing braces.
-- `sports_tracker.database` provides reusable pyodbc connection helpers with context-managed cleanup.
-- `scripts/check_database.py` runs one read-only SQL Server metadata query without displaying the password or complete connection string.
+Unfinished matches with no provider result retain absent/`NULL` scores. Finished
+results preserve explicit types including `HalfTime` and `After90Minutes`. Invalid
+identity, relationship, timestamp, or score combinations fail validation before
+current state changes.
 
-No database tables, migrations, ingestion, API, UI, or scheduler are implemented in Stage 0.
+Fixture/result/goal writes, changes, successful status, and checkpoint advancement
+share a transaction. Failure provenance is recorded in a separate transaction
+only after the primary rollback succeeds. If rollback fails, the importer does
+not attempt or commit a failed-run record and reports that database state is
+unconfirmed. Retrying is safe only after a confirmed rollback or manual database
+inspection.
 
-Competition selection must remain configurable through the OpenLigaDB shortcut, season, league ID, and matchday selection so the architecture can support future competitions. Only the UEFA Champions League 2026/27 is currently planned; this configurability does not imply that other competitions or ingestion are implemented.
+`dbo.teams.team_icon_url` is optional `nvarchar(2048)` metadata, not image
+storage. The importer retains only trimmed absolute HTTP(S) URLs that fit that
+limit. Embedded `data:` URIs, malformed values, and oversized URLs are stored as
+`NULL` with a warning that reports only the type and character count. The current
+browser API and dashboard display team names only; they do not expose or render
+team-icon values.
 
-## Implemented Stage 1 foundation
+### Synchronization and recovery
 
-Stage 1 source retrieval and raw snapshot code is complete, tested, documented, committed, and pushed according to the user's supplied status. The HTTPX client fetches one explicitly requested matchday, applies only basic source-identity checks, and raises descriptive custom errors for network, HTTP, empty-body, and invalid-JSON failures. The snapshot writer preserves exact response bytes and writes provenance metadata with a UTC retrieval time, HTTP status, content type, byte count, and SHA-256 hash in a timestamp/hash directory without overwriting an existing snapshot. Scheduling and repeated polling are intentionally excluded and remain unimplemented.
+The synchronizer is one-shot. An atomic lock prevents overlap. A full matchday is
+skipped only when a reliable timezone-aware last-change value is not newer than the
+committed checkpoint. Unsupported, empty, malformed, or timezone-ambiguous signals
+force retrieval. Transient retries use capped backoff.
 
-## Implemented Stage 2 schema design
+Structured logs rotate under ignored `data/runtime/` and exclude credentials. If
+capture succeeds but import fails, the snapshot remains available for offline
+replay. Stale locks require manual inspection; the process never guesses that
+another owner is dead.
 
-Stage 2 is implemented as the unapplied T-SQL script `sql/001_initial_schema.sql`. It creates guarded, dbo-scoped tables and indexes for competitions, competition seasons, teams, matches, match results, observed goals, import runs, source snapshots, validation issues, match changes, synchronization checkpoints, and application-owned match notes. The script uses an explicit `SportsFixturesTracker` database context, a transaction with error handling, and no destructive statements or permission grants. It has NOT been executed, deployed, or verified against SQL Server.
+### API and browser boundary
 
-The schema deliberately stores raw snapshot metadata and filesystem paths, not the original response bytes. A unique local snapshot directory identifies each capture, while the content hash is indexed but not unique, so identical response bytes captured at different times remain distinct observations. The unique provider/source identities and per-snapshot change key support later idempotent import logic without claiming that ETL has been implemented.
+FastAPI uses typed models, bounded pagination, validated filters, parameterized
+SQL, loopback middleware, and generic database errors. Note mutation is off by
+default and requires a separate local token when enabled. It cannot update source
+fixtures or results.
 
-## Components
+The browser provides fixture filters, result/goal detail, field changes, import
+runs, and validation issues. Provider values use `textContent`, not HTML injection.
 
-| Component | Responsibility |
+### Deferred scope
+
+No public deployment, external authentication, worker queue, schema expansion, or
+multi-competition scope is implemented. Expansion to all 144 UCL league-phase
+fixtures and later knockouts follows only after Matchdays 3 and 4 pass correctness,
+idempotency, rollback, replay, and incremental-efficiency evaluation.
+
+## Scope and boundaries
+
+The current implementation is UCL-only in its documented behavior:
+
+| Property | Current value |
 | --- | --- |
-| Source client | Retrieve OpenLigaDB responses with bounded timeouts and failure handling |
-| Raw capture | Preserve original JSON and request/retrieval provenance |
-| Normalization and validation | Convert supported fields and reject or report invalid records |
-| Import service | Apply valid changes and maintain run status and checkpoints |
-| SQL Server | Store relationships, current state, history, issues, and notes |
-| FastAPI | Expose current data and application-owned notes |
-| HTML/CSS/JavaScript | Let users review data and manage notes |
-| Scheduler | Invoke the existing import command at the documented interval |
+| Competition | UEFA Champions League 2026/27 |
+| OpenLigaDB shortcut | `ucl` |
+| Season | `2026` |
+| Expected league ID | `4946` |
+| Initial matchdays | `3`, `4` |
+| Planned eventual coverage | 144 league-phase fixtures and later knockout fixtures |
 
-Prefer one small application with a reusable import command. Exact package names, entry points, ports, environment, and scheduler remain implementation decisions.
+Provider, competition, season, and matchday values are configuration inputs so
+that another competition can be supported later. No other competition is
+currently implemented or claimed.
 
-## Stage 2 entity relationships
+## Layers
 
-| Entity | Purpose and principal relationships |
-| --- | --- |
-| `competitions` | Provider-level competition identity, such as OpenLigaDB `ucl`. One competition has many `competition_seasons`. |
-| `competition_seasons` | Provider league ID and season identity. One season has many `matches`, `import_runs`, and `sync_checkpoints`. |
-| `teams` | One provider team identity and source-owned attributes. A team can be referenced as home or away by many matches and as the scoring team for goals. |
-| `matches` | One current fixture per `(provider, provider_match_id)`, linked to one competition season and two teams. Stores matchday/stage and source timestamps. |
-| `match_results` | Child result observations keyed by provider result ID and distinct `result_type_kind`, including `HalfTime` and `After90Minutes`. Future matches have no fabricated result rows. |
-| `match_goals` | Optional child goal observations using fields confirmed in saved Stage 1 responses. It is not required for a future match with an empty `goals` collection. |
-| `source_snapshots` | Metadata for each preserved response: URL, retrieval time, HTTP details, hash, size, and local paths. Raw bytes remain on disk. |
-| `import_runs` | Later ETL run status, scope, counts, errors, replay relationship, and source snapshot reference. A failure record may be written after a rolled-back transaction. |
-| `validation_issues` | Detailed record/field problems tied to an import run and/or snapshot. |
-| `match_changes` | Field-level observed history tied to a match, import run, snapshot, old/new values, and observation time. |
-| `sync_checkpoints` | One application-managed scope checkpoint that advances only after successful processing. It references the successful import and snapshot. |
-| `match_notes` | Application-owned notes linked to matches, independent of source-owned fixture and result columns. |
+1. **Raw source layer** — Stage 1 stores the exact HTTP response bytes as
+   `response.json` and provenance in `metadata.json`. A timestamp/hash-based
+   directory is never overwritten. `data/raw/` is ignored by Git.
+2. **Parsing and validation layer** — `src/sports_tracker/ingestion.py` reads
+   local snapshots and maps the observed OpenLigaDB fields into typed records.
+   It validates identity and relationships before database writes.
+3. **Transactional persistence layer** — `SQLServerImportStore` uses the
+   deployed SQL Server schema through parameterized pyodbc statements. The
+   snapshot, import run, current rows, child rows, changes, and checkpoint are
+   coordinated by one transaction. DML-plus-identity batches advance through
+   intermediate ODBC result sets before reading `SCOPE_IDENTITY()`.
+4. **Manual CLI layer** — `scripts/import_snapshot.py` supports offline
+   dry-runs and explicit imports of one saved snapshot. It does not fetch the
+   live API or schedule work.
 
-The principal foreign-key paths are `competitions -> competition_seasons -> matches`; `teams -> matches`; `matches -> match_results/match_goals/match_changes/match_notes`; `source_snapshots -> import_runs/validation_issues/match_changes/sync_checkpoints`; and `import_runs -> validation_issues/match_changes/sync_checkpoints`. The script adds indexes for provider identity, competition/season, kickoff, home/away team filtering, matchday/stage, import inspection, change history, snapshot lookup, and checkpoint lookup.
+## Observed OpenLigaDB mapping
 
-## Source contract
+The mapping is based on the saved UCL responses inspected before implementation:
 
-Consult current official documentation during Stage 1:
-- https://api.openligadb.de/index.html
-- https://api.openligadb.de/swagger/v1/swagger.json
+- match identity: `matchID`, `leagueShortcut`, `leagueSeason`, `leagueId`, and
+  `leagueName`;
+- teams: `team1` and `team2`, including `teamId`, `teamName`, `shortName`,
+  `tla`, `teamIconUrl`, `teamGroupName`, and `wikidataId`;
+- fixture: `matchDateTimeUTC`, `matchDateTime`, `timeZoneID`, `matchIsFinished`,
+  `group`, `location`, and `lastUpdateDateTime`;
+- results: `matchResults[]`, with `resultID`, `resultName`,
+  `resultTypeKind`, `resultTypeID`, `resultOrderID`, `pointsTeam1`, and
+  `pointsTeam2`;
+- goals: `goals[]`, with `goalID`, scorer fields, `matchMinute`, cumulative
+  `scoreTeam1`/`scoreTeam2`, `scoringTeamId`, and own-goal/penalty/overtime
+  flags.
 
-OpenLigaDB is community-maintained. Verify field meanings, result metadata, request limits, attribution, and applicable data-license requirements before implementing source behavior.
+The source’s `lastUpdateDateTime` was observed without an offset. It is retained
+as raw source text rather than being guessed into UTC. `matchDateTimeUTC` is the
+authoritative kickoff timestamp when it is present and timezone-aware.
 
-Preserve missing scores on unfinished records as `NULL`; never convert missing future results to zero. Interpret result entries explicitly by `resultType`, including `HalfTime` and `After90Minutes`, and do not choose a score from an undifferentiated result list or infer a detailed state from a finished flag alone. Use explicit UTC kickoff data where supplied; preserve uncertainty in source timestamps without offsets.
+## Import semantics
 
-A captured response should retain the request details, retrieval time, HTTP status, content hash, and complete source body. Keep captured data outside Git by default.
+The importer follows this sequence:
 
-The saved Matchday 3 and 4 responses were inspected before designing the child tables. Match records contain nested `team1`/`team2`, `group`, `matchResults`, and `goals` objects. Result records expose `resultID`, `resultTypeID`, `resultTypeKind`, order, descriptions, and team points. Goal records expose `goalID`, cumulative team scores, minute, scorer fields, scoring team, penalty/own-goal/overtime flags, and an optional comment, so the observed fields are represented in `match_goals` without inventing additional provider fields. Matchday 4 has empty result and goal collections, so no 0-0 or placeholder child rows are created.
+1. Resolve a snapshot directory and verify its metadata, response byte count,
+   SHA-256, provider, URL, shortcut, season, and league ID.
+2. Parse every record. Invalid records create actionable validation issues;
+   invalid input does not partially update current fixture data.
+3. Begin a SQL transaction and ensure the source snapshot, competition, season,
+   and import run exist.
+4. Upsert teams by provider/team ID, then matches by provider/match ID.
+5. Upsert explicit result rows by provider/result ID and result type. The
+   `HalfTime` row is not substituted for `After90Minutes`.
+6. Upsert goals by provider/goal ID, preserving the source’s cumulative score
+   and flags.
+7. Compare incoming values with the current match/child values. Insert a
+   structured `match_changes` row only for an actual value transition. A first
+   import establishes the baseline and does not fabricate a change from NULL.
+8. Mark the import run successful and advance the checkpoint only after all
+   writes are valid. Commit once.
 
-The observed `matchDateTimeUTC` includes an explicit `Z` and maps to `kickoff_utc`. The observed `lastUpdateDateTime` is offset-free, so the schema provides both nullable `source_last_update_utc` and `source_last_update_raw`; later ETL must leave the UTC column null unless the provider's timezone semantics are verified.
+An identical replay finds the existing provider keys, updates no business
+values, and records no additional change history. A different snapshot can
+record changes such as final score, finish state, kickoff, team, result, or goal
+fields. Missing rows in a later source response are not interpreted as deletes
+in Stage 3.
 
-## Planned engineering evaluation
+Unfinished future fixtures have no result rows when the source has an empty
+`matchResults` array. The importer never changes an unknown future score to
+zero. Any SQL score columns remain NULL/absent until an explicit source result
+exists. Result types must always be interpreted explicitly: half-time is an
+intermediate state and `After90Minutes` is the ordinary regulation full-time
+state; additional source result types require deliberate handling.
 
-The following evaluations are planned for later SQL loading and change-tracking stages. All remain NOT RUN:
+## Failure and recovery
 
-- **Idempotency:** replay an identical snapshot and verify no duplicate current rows, observed changes, or checkpoint updates.
-- **Change-detection accuracy:** compare controlled fixture variants and unchanged replays, measuring false positives and false negatives while interpreting result types explicitly.
-- **Transaction rollback:** inject a SQL Server batch failure and verify current records, change history, and successful checkpoints are not partially committed.
-- **Incremental request efficiency:** measure request counts for active matchdays and later refreshes while respecting OpenLigaDB's 60-requests-per-minute limit and avoiding aggressive polling.
-- **Snapshot replay:** replay saved response bytes offline and verify hash, provenance, and deterministic downstream results without a network request.
+Validation happens before business-row writes. SQL failures roll back the
+transaction. The importer then attempts a separate failed-run record with a
+safe status/message; it never writes a password, connection string, or raw
+secret to the database or console. Retrying the same snapshot is safe because
+provider IDs and schema unique constraints make the operation idempotent.
 
-## Stage 2 relational model implemented in SQL
+Raw snapshot files are never edited by the importer. A failed import does not
+delete or replace source evidence.
 
-| Table | Purpose |
-| --- | --- |
-| competitions | Provider and competition shortcut identity |
-| competition_seasons | Source league ID and season identity |
-| teams | Source team identity and current supported attributes |
-| matches | Current normalized fixtures and results |
-| match_results | Explicit result-type scores, including half-time and final results |
-| match_goals | Observed provider goal events and cumulative score fields |
-| import_runs | Scope, status, timing, counters, replay, and failure diagnostics |
-| source_snapshots | Captured response provenance and local paths, not raw bytes |
-| validation_issues | Record-level or batch-level reasons an import cannot proceed |
-| match_changes | Observed old/new business values and associated imports |
-| sync_checkpoints | Mark successfully applied source updates |
-| match_notes | Application-owned notes linked to matches |
+## Existing schema assumptions
 
-The exact columns, keys, foreign keys, nullability, indexes, and source-ID scope are defined in `sql/001_initial_schema.sql`. The DDL remains unapplied. SQL Server integration tests must use SQL Server itself.
+Stage 3 intentionally reuses the deployed 12-table schema:
 
-## Stage 2 verification plan — NOT RUN
+- `source_snapshots` stores source provenance and the local directory;
+- `competitions` and `competition_seasons` identify the competition;
+- `teams`, `matches`, `match_results`, and `match_goals` hold current data;
+- `import_runs` and `validation_issues` provide operational provenance;
+- `match_changes` stores field-level transitions;
+- `sync_checkpoints` records the last successful snapshot;
+- `match_notes` remains outside automated source ownership.
 
-Before any later import is accepted, perform these checks against SQL Server in a separate controlled test database or approved test schema as appropriate. None has been completed:
+The importer assumes the SQL file currently deployed by the owner, including
+the `source_snapshots.local_directory nvarchar(750)` limit, provider-aware
+unique constraints, and the score/foreign-key constraints. It does not perform
+schema migration. A deployment mismatch must stop the manual run and be
+diagnosed before retrying.
 
-- **Unique match identity:** attempt duplicate `(provider, provider_match_id)` values and confirm the unique constraint rejects them without changing existing rows.
-- **Referential integrity:** attempt orphan competition-season, team, result, snapshot, change, checkpoint, and note rows and confirm foreign keys reject them.
-- **Upcoming fixture scores:** load a Matchday 4-shaped fixture with no result rows and confirm no fabricated 0-0 result is created; valid completed 0-0 must remain distinguishable from missing results.
-- **Result-type modeling:** load `HalfTime` and `After90Minutes` rows for one match and confirm both remain distinct with their own result identity and scores.
-- **Snapshot provenance:** record two snapshots with the same SHA-256 and different retrieval timestamps and confirm both remain queryable with separate IDs and paths.
-- **Idempotent reimport support:** reprocess the same snapshot in a later ETL test and confirm fixture state is not duplicated and the per-snapshot change key prevents duplicate observed changes.
-- **Historical change support:** modify one business field in controlled input and confirm one field-level old/new history row points to the correct import and snapshot.
-- **Transaction rollback and checkpoint recovery:** inject a failure after partial staging and confirm current rows, changes, and checkpoints do not advance; persist the failed-run diagnostic after rollback in a separate transaction.
+## Deliberate limitations and open questions
 
-## Import consistency
-
-Proposed policy: all-or-nothing current-record updates per matchday.
-
-1. Start a run and preserve its source evidence.
-2. Normalize and validate the selected batch.
-3. If validation fails, retain diagnostics without partially changing current matches or advancing the success checkpoint.
-4. If valid, apply teams/current matches, business-change history, and the success checkpoint within the defined transaction boundary.
-5. If database work fails, roll back its changes and persist the failed-run diagnostic outside the failed transaction.
-
-Specify which metadata is retained before the transaction and how failed-run details are written after rollback. Decide the overlap/concurrency strategy before implementing it. File capture and database commit are separate operations; document their failure handling rather than implying a single atomic filesystem/database transaction.
-
-Use stable source identifiers and relational constraints. Compare normalized business fields, excluding retrieval-only metadata.
-
-## History and incremental updates
-
-The first import establishes a baseline. History begins when the application observes a later difference, not at an invented earlier event time.
-
-Record old value, new value, observed time, and import reference. An unchanged repeated input must produce no duplicate matches or false business changes. Preserve relevant source update markers without inventing their timezone.
-
-Use documented source change polling and bounded retries. Checkpoints represent successful application, not merely successful downloads.
-
-## API and interface
-
-Planned capabilities:
-- Filtered, paginated matches and match details.
-- Observed change history.
-- Import runs and validation issues.
-- Create/read/update/delete of local notes.
-
-Exact routes and response contracts will be defined in Stage 4. Parameterize SQL, validate input, and keep note writes transactional. Notes cannot overwrite source-owned scores or fixtures.
-
-The interface must support real imported data, understandable errors, empty history, and notes that persist after refresh. Safely render external text.
-
-## SQL and verification
-
-Useful reports include import reconciliation, duplicate checks, recent changes, rejected records, and failed runs. Use joins and analytical SQL where they answer those questions. Review a real frequently used query and justify indexes with its execution plan.
-
-Verify offline normalization and failure boundaries, real SQL Server behavior, API requests, browser workflows, and scheduling separately. Controlled data changes and failures belong in clearly labeled tests with a separate database.
-
-Do not publish invented performance gains, scale, screenshots, or passing badges. Record actual results in BUILD_PLAN.md.
-
-## Deferred decisions
-
-Database host and authentication; Python environment; exact schema and migration approach; application entry points and routes; synchronization locking; scheduler; raw-data retention.
-
-Resolve these from the user's environment and implementation evidence, not guessed setup.
+- SQL Server integration has not been executed in this handoff.
+- The ordinary test suite and lint/format checks have not been executed in this
+  handoff.
+- Source `lastUpdateDateTime` timezone semantics need a provider decision before
+  it can be used as a UTC checkpoint value.
+- Player identity is retained as source fields; no player dimension is created.
+- A later stage must define deletion/retraction semantics for records omitted
+  from a source response.
+- Live retries, rate limiting, incremental request planning, and scheduling are
+  not implemented.
+- The exact goal count is source-data evidence to be confirmed by the owner’s
+  dry run; it is not a hard-coded importer assumption.

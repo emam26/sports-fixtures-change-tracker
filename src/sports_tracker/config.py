@@ -62,6 +62,35 @@ class OpenLigaDBSettings:
     user_agent: str = "sports-fixtures-change-tracker/0.1 (OpenLigaDB client)"
 
 
+@dataclass(frozen=True)
+class SyncSettings:
+    """Validated one-shot synchronization settings."""
+
+    matchdays: tuple[int, ...]
+    max_retries: int
+    backoff_initial_seconds: float
+    backoff_max_seconds: float
+    lock_file: Path
+    log_directory: Path
+
+
+@dataclass(frozen=True, repr=False)
+class ApplicationSettings:
+    """Validated local API security settings."""
+
+    local_only: bool
+    allow_note_writes: bool
+    notes_write_token: str | None
+
+    def __repr__(self) -> str:
+        return (
+            "ApplicationSettings("
+            f"local_only={self.local_only!r}, "
+            f"allow_note_writes={self.allow_note_writes!r}, "
+            "notes_write_token='<redacted>')"
+        )
+
+
 def escape_odbc_value(value: str) -> str:
     """Brace-quote an ODBC value and escape closing braces safely."""
 
@@ -162,6 +191,59 @@ def _positive_int(values: Mapping[str, str], key: str) -> int:
     return parsed
 
 
+def _boolean_value(
+    values: Mapping[str, str],
+    key: str,
+    *,
+    default: bool,
+) -> bool:
+    raw_value = values.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        return default
+    value = str(raw_value).strip().lower()
+    if value in {"yes", "true", "1"}:
+        return True
+    if value in {"no", "false", "0"}:
+        return False
+    raise ConfigurationError(f"Setting {key} must be yes or no")
+
+
+def _optional_positive_float(
+    values: Mapping[str, str],
+    key: str,
+    *,
+    default: float,
+) -> float:
+    raw_value = values.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        return default
+    try:
+        value = float(str(raw_value).strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"Setting {key} must be a number") from exc
+    if value <= 0:
+        raise ConfigurationError(f"Setting {key} must be greater than zero")
+    return value
+
+
+def _optional_nonnegative_int(
+    values: Mapping[str, str],
+    key: str,
+    *,
+    default: int,
+) -> int:
+    raw_value = values.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        return default
+    try:
+        value = int(str(raw_value).strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"Setting {key} must be an integer") from exc
+    if value < 0:
+        raise ConfigurationError(f"Setting {key} must not be negative")
+    return value
+
+
 def load_openligadb_settings(
     dotenv_path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
@@ -192,6 +274,87 @@ def load_openligadb_settings(
         expected_league_id=expected_league_id,
         timeout_seconds=timeout_seconds,
         raw_snapshot_directory=Path(raw_directory),
+    )
+
+
+def load_sync_settings(
+    dotenv_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> SyncSettings:
+    """Load conservative synchronization, retry, lock, and log settings."""
+
+    values = _merged_values(dotenv_path, environ)
+    matchdays_text = str(values.get("OPENLIGADB_MATCHDAYS", "3,4")).strip()
+    try:
+        matchdays = tuple(int(item.strip()) for item in matchdays_text.split(","))
+    except ValueError as exc:
+        raise ConfigurationError(
+            "OPENLIGADB_MATCHDAYS must be a comma-separated list of integers"
+        ) from exc
+    if not matchdays or any(matchday <= 0 for matchday in matchdays):
+        raise ConfigurationError("OPENLIGADB_MATCHDAYS must contain positive integers")
+    if len(set(matchdays)) != len(matchdays):
+        raise ConfigurationError("OPENLIGADB_MATCHDAYS must not contain duplicates")
+
+    max_retries = _optional_nonnegative_int(
+        values,
+        "OPENLIGADB_MAX_RETRIES",
+        default=3,
+    )
+    if max_retries > 10:
+        raise ConfigurationError("OPENLIGADB_MAX_RETRIES must not exceed 10")
+    backoff_initial = _optional_positive_float(
+        values,
+        "OPENLIGADB_BACKOFF_INITIAL_SECONDS",
+        default=1.0,
+    )
+    backoff_max = _optional_positive_float(
+        values,
+        "OPENLIGADB_BACKOFF_MAX_SECONDS",
+        default=8.0,
+    )
+    if backoff_max < backoff_initial:
+        raise ConfigurationError(
+            "OPENLIGADB_BACKOFF_MAX_SECONDS must be at least the initial backoff"
+        )
+
+    lock_file = str(values.get("SYNC_LOCK_FILE", "data/runtime/sync.lock")).strip()
+    log_directory = str(values.get("SYNC_LOG_DIRECTORY", "data/runtime/logs")).strip()
+    if not lock_file or not log_directory:
+        raise ConfigurationError("Synchronization lock and log paths must not be blank")
+    return SyncSettings(
+        matchdays=matchdays,
+        max_retries=max_retries,
+        backoff_initial_seconds=backoff_initial,
+        backoff_max_seconds=backoff_max,
+        lock_file=Path(lock_file),
+        log_directory=Path(log_directory),
+    )
+
+
+def load_application_settings(
+    dotenv_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> ApplicationSettings:
+    """Load local-only API and note-write authorization settings."""
+
+    values = _merged_values(dotenv_path, environ)
+    local_only = _boolean_value(values, "API_LOCAL_ONLY", default=True)
+    allow_note_writes = _boolean_value(
+        values,
+        "API_ALLOW_NOTE_WRITES",
+        default=False,
+    )
+    token_value = values.get("API_NOTES_WRITE_TOKEN")
+    token = None if token_value is None else str(token_value).strip() or None
+    if allow_note_writes and (token is None or len(token) < 16):
+        raise ConfigurationError(
+            "API_NOTES_WRITE_TOKEN must contain at least 16 characters when writes are enabled"
+        )
+    return ApplicationSettings(
+        local_only=local_only,
+        allow_note_writes=allow_note_writes,
+        notes_write_token=token,
     )
 
 

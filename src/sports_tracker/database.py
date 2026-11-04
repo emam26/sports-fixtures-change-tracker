@@ -14,7 +14,7 @@ def connect_database(settings: DatabaseSettings | None = None) -> pyodbc.Connect
     """Open a SQL Server connection using validated local settings."""
 
     resolved_settings = settings or load_database_settings()
-    return pyodbc.connect(build_connection_string(resolved_settings))
+    return pyodbc.connect(build_connection_string(resolved_settings), autocommit=False)
 
 
 @contextmanager

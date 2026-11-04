@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Local UEFA Champions League fixture change tracker">
+    <title>Fixtures &amp; Change Tracker</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">UEFA Champions League · 2026/27</p>
+        <h1>Fixtures &amp; Change Tracker</h1>
+        <p class="lede">A local view of fixtures, source history, and import health.</p>
+      </div>
+      <div id="health" class="health" role="status" aria-live="polite">Checking database…</div>
+    </header>
+
+    <nav class="tabs" aria-label="Dashboard sections">
+      <button class="tab is-active" type="button" data-panel="fixtures">Fixtures</button>
+      <button class="tab" type="button" data-panel="operations">Operations</button>
+    </nav>
+
+    <main id="main">
+      <section id="fixtures" class="panel is-active" aria-labelledby="fixtures-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Current source state</p>
+            <h2 id="fixtures-heading">Fixture board</h2>
+          </div>
+          <form id="filters" class="filters">
+            <label>
+              Matchday
+              <select id="matchday" name="matchday">
+                <option value="">All loaded</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
+            <label>
+              Status
+              <select id="finished" name="finished">
+                <option value="">All</option>
+                <option value="true">Finished</option>
+                <option value="false">Upcoming</option>
+              </select>
+            </label>
+            <label class="search-label">
+              Team search
+              <input id="search" name="search" maxlength="200" placeholder="Club name">
+            </label>
+            <button class="primary" type="submit">Apply</button>
+          </form>
+        </div>
+
+        <p id="fixture-status" class="status" role="status" aria-live="polite"></p>
+        <div id="fixture-list" class="fixture-grid"></div>
+      </section>
+
+      <section id="operations" class="panel" aria-labelledby="operations-heading" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Provenance and validation</p>
+            <h2 id="operations-heading">Operations</h2>
+          </div>
+          <button id="refresh-operations" class="secondary" type="button">Refresh</button>
+        </div>
+        <div class="operations-grid">
+          <article>
+            <h3>Recent import runs</h3>
+            <div id="import-runs" class="stack"></div>
+          </article>
+          <article>
+            <h3>Validation issues</h3>
+            <div id="validation-issues" class="stack"></div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="match-dialog" aria-labelledby="dialog-title">
+      <form method="dialog" class="dialog-close">
+        <button type="submit" aria-label="Close match details">×</button>
+      </form>
+      <div id="match-detail"></div>
+    </dialog>
+
+    <template id="empty-template">
+      <div class="empty-state">
+        <p>No records match this view.</p>
+      </div>
+    </template>
+  </body>
+</html>

@@ -1,332 +1,464 @@
 # Manual Runbook
 
-Codex prepares instructions; the user executes them. This file should become the repeatable operating guide as the application is implemented.
+## Stage 3–10 verification and local operation — NOT RUN
 
-Read AGENTS.md for execution rules and BUILD_PLAN.md for current status. None of the operational sections below implies the application already works.
+Run in order and stop at the first failure. Return complete non-secret output.
+Never paste `.env`, a password, token, or complete connection string.
 
-## Terminal and repository
+### 1. Install updated dependencies
 
-Use WSL/Ubuntu Bash for project terminal commands.
-
-Repository: /mnt/f/sports-fixtures-change-tracker.
-
-The following checks have already been reported by the user:
+Where: WSL Bash  
+Working directory: `/mnt/f/sports-fixtures-change-tracker`
 
 ```bash
-cd /mnt/f/sports-fixtures-change-tracker
-git status --short --branch
-python3 --version
-cat /etc/os-release
-uname -m
-```
-
-They establish environment details only. Results are recorded in BUILD_PLAN.md. Run commands individually and resolve a failure before dependent steps.
-
-## Stage 0 foundation verification
-
-Status: Stage 0 is complete and verified from user-supplied manual execution evidence on 2026-11-02. Codex did not execute the commands. SQL loading/ingestion and every later stage remain not started; Stage 1 retrieval and raw snapshot capture are covered by the separate verification record below.
-
-### WSL Bash, project environment
-
-Working directory: `/mnt/f/sports-fixtures-change-tracker`.
-
-```bash
-cd /mnt/f/sports-fixtures-change-tracker
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
-if [ ! -f .env ]; then cp .env.example .env; fi
 ```
 
-Verified result on 2026-11-02: editable project installation succeeded. The local package, `pyodbc==5.3.0`, `python-dotenv`, pytest, and Ruff were available. `.env` is ignored by Git. No password or `.env` contents were recorded.
+Expected: editable installation completes without a resolver error.
 
-Edit `.env` locally after copying it. Set `SQL_SERVER_HOST` to the current Windows host address visible from WSL, keep `SQL_SERVER_PORT=1433`, and enter the password only in `.env`. The user-reported address is currently `172.20.80.1`; it may change after a WSL or network restart. Inspect the current candidate with:
+### 2. Static checks
 
-```bash
-WIN_HOST_IP="$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf)"
-printf 'Use SQL_SERVER_HOST=%s\n' "$WIN_HOST_IP"
-```
-
-Do not paste the password or `.env` contents into chat.
-
-### WSL Bash, offline project checks
-
-Working directory: `/mnt/f/sports-fixtures-change-tracker`; keep the virtual environment active.
+Where: same WSL Bash and directory.
 
 ```bash
-python -m pytest
-```
-
-Verified result on 2026-11-02: pytest passed 5 tests in 0.13 seconds. This is an offline check and does not establish UCL ingestion or later-stage behavior.
-
-```bash
-ruff check .
-```
-
-Verified result on 2026-11-02: Ruff check passed. This is a static check and does not establish UCL ingestion or later-stage behavior.
-
-Ruff formatting verification also passed, with 10 files formatted.
-
-### WSL Bash, permanent read-only database check
-
-Working directory: `/mnt/f/sports-fixtures-change-tracker`; use the local `.env` and the active virtual environment. Target: SQL Server `CANVASIT`, database `SportsFixturesTracker`, runtime login `sports_tracker_app`, current reported TCP address `172.20.80.1:1433`.
-
-```bash
-python scripts/check_database.py
-```
-
-Verified result on 2026-11-02: `scripts/check_database.py` succeeded and reported server `CANVASIT`, login `sports_tracker_app`, database `SportsFixturesTracker`, edition `Standard Developer Edition (64-bit)`, and version `17.0.1000.7`. The script runs a read-only metadata query and did not record or display the password or complete connection string.
-
-## Stage 1 OpenLigaDB retrieval and raw snapshots
-
-Status: Stage 1 is complete, tested, documented, committed, and pushed according to the user's supplied status. Codex did not execute the live requests or verification in this handoff.
-
-Source scope: UEFA Champions League 2026/27; OpenLigaDB shortcut `ucl`; season `2026`; expected league ID `4946`; initial Matchdays 3 and 4. The endpoint is `/getmatchdata/ucl/2026/{matchday}` under `https://api.openligadb.de`.
-
-The source client uses an explicit timeout and descriptive User-Agent, validates only the top-level list, `matchID`, shortcut, season, and league ID, and does not schedule or poll. Successful responses are preserved byte-for-byte as `response.json`; `metadata.json` records provider, URL, source identity, retrieval UTC time, HTTP status, content type, byte count, and SHA-256. Snapshot directories include a UTC timestamp and full hash, and existing snapshots are never overwritten.
-
-### WSL Bash, Stage 1 prerequisites
-
-Working directory: `/mnt/f/sports-fixtures-change-tracker`; use the active `.venv`.
-
-```bash
-python -m pip install -e ".[dev]"
-python -m pytest
 ruff check .
 ruff format --check .
 ```
 
-Expected result: HTTPX is installed, the isolated tests pass, Ruff reports no errors, and formatting is clean. The user-supplied results are recorded below; Codex did not run these checks. Stop on the first failure and return only non-secret output.
+Expected: both exit zero. Stop after either failure and return the diagnostic; do
+not auto-format before preserving the evidence.
 
-### WSL Bash, initial UCL captures
-
-Working directory: `/mnt/f/sports-fixtures-change-tracker`; use the local `.env` and active `.venv`. Ensure the source settings identify `ucl`, season `2026`, league ID `4946`, and `data/raw` before making a request.
-
-Run each command separately:
+### 3. Offline tests
 
 ```bash
-python scripts/fetch_openligadb.py --matchday 3
-python scripts/fetch_openligadb.py --matchday 4
+pytest -q -m "not sqlserver"
 ```
 
-Expected result: each command prints a match count, snapshot location, SHA-256 hash, and concise success message. The raw files should be under the configured `data/raw` directory. The user-supplied results for these live commands are recorded below; Codex did not run them. Stop after the first failure and return only non-secret output.
+Expected: all selected tests pass without SQL Server or internet access. Return the
+summary and warnings.
 
-OpenLigaDB read access is documented as limited to 60 requests per minute per IP. Do not use aggressive polling, add scheduling, or repeat requests beyond what is needed for the explicitly selected matchday captures.
+### 4. Identify and validate immutable snapshots
 
-## Stage 1 manual verification record — 2026-11-02
+```bash
+find data/raw -type f -name metadata.json -print | sort
+```
 
-This record contains user-supplied evidence. It was not executed by Codex. Stage 1 is complete, tested, documented, committed, and pushed according to the user's supplied status.
+Copy an exact parent directory from that output into each placeholder:
 
-From WSL Bash, in the repository root, the reproducible command set is:
+```bash
+python scripts/evaluate_snapshot.py "<SNAPSHOT_DIRECTORY>"
+python scripts/import_snapshot.py --snapshot "<SNAPSHOT_DIRECTORY>" --dry-run
+```
+
+Expected Matchday 3: 18 unique completed matches and SHA-256
+`88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348`.
+Expected Matchday 4: 18 unique unfinished matches, absent results, and SHA-256
+`a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245`.
+Stop if a hash differs. Do not paste raw response content.
+
+### 5. Read-only SQL Server integration test
+
+Where: WSL Bash. Target: configured dedicated `SportsFixturesTracker` database.
+
+```bash
+RUN_SQLSERVER_INTEGRATION=yes pytest -q -m sqlserver
+```
+
+Expected: the 12-table schema test passes. This command does not import data.
+
+### 6. Controlled import and replay
+
+```bash
+python scripts/import_snapshot.py "<MATCHDAY_3_SNAPSHOT_A>"
+python scripts/import_snapshot.py "<MATCHDAY_3_SNAPSHOT_A>"
+python scripts/import_snapshot.py "<MATCHDAY_3_SNAPSHOT_B>"
+python scripts/import_snapshot.py "<MATCHDAY_4_SNAPSHOT>"
+```
+
+Pause after the first command and record the result/goal/change row counts using
+the corresponding query in Step 7. Run the exact replay, execute that count query
+again, and require all three values to be unchanged before continuing.
+
+Expected domain state: 36 unique provider match IDs, 18 finished and 18 unfinished.
+Exact and same-content replay must not duplicate matches/results/goals or create
+false changes. Provenance/import counts may grow and are not domain duplicates.
+
+### 7. Verify database invariants
+
+Where: a confirmed SQL client. Target: `SportsFixturesTracker`.
+
+```sql
+SELECT COUNT(*) AS matches,
+       COUNT(DISTINCT provider_match_id) AS unique_provider_matches,
+       SUM(CASE WHEN is_finished = 1 THEN 1 ELSE 0 END) AS finished,
+       SUM(CASE WHEN is_finished = 0 THEN 1 ELSE 0 END) AS unfinished
+FROM dbo.matches;
+
+SELECT provider_match_id, COUNT(*) AS duplicates
+FROM dbo.matches
+GROUP BY provider_match_id
+HAVING COUNT(*) > 1;
+
+SELECT (SELECT COUNT(*) FROM dbo.match_results) AS result_rows,
+       (SELECT COUNT(*) FROM dbo.match_goals) AS goal_rows,
+       (SELECT COUNT(*) FROM dbo.match_changes) AS change_rows;
+
+SELECT status, COUNT(*) AS runs
+FROM dbo.import_runs
+GROUP BY status
+ORDER BY status;
+
+SELECT COUNT(*) AS recorded_changes FROM dbo.match_changes;
+
+SELECT provider, scope_key, matchday_number, last_source_update_utc,
+       last_processed_at_utc, last_successful_import_run_id
+FROM dbo.sync_checkpoints
+ORDER BY provider, scope_key;
+```
+
+Expected first row: `36 / 36 / 18 / 18`; the match duplicate query returns zero
+rows. Capture result/goal/change counts before and after the exact replay; all three
+must remain unchanged. Baseline and unchanged replay create no business changes.
+Goal count is source-dependent and must be compared with parsed data, not guessed.
+
+### 8. Inspect operations and run the local API
+
+```bash
+python scripts/inspect_operations.py --limit 20
+python scripts/run_api.py --host 127.0.0.1 --port 8000
+```
+
+Expected: Uvicorn listens on `http://127.0.0.1:8000`. In a browser, inspect
+`/health`, `/docs`, and `/`. Verify filters, details, changes, operations, responsive
+layout, keyboard focus, and that note writes return 403 by default. Stop with
+Ctrl+C. Do not return headers containing a note token.
+
+### 9. Live one-shot sync — only after Steps 1–8 pass
+
+This may make source requests and SQL writes:
+
+```bash
+python scripts/sync_openligadb.py --matchday 3 --matchday 4
+```
+
+Expected: each matchday is safely skipped or captured/imported once. Retries are
+bounded. OpenLigaDB permits 60 requests per minute; do not run repeatedly or add
+aggressive polling.
+
+### 10. Scheduling handoff — do not activate yet
+
+First verify the wrapper manually:
+
+```bash
+bash scripts/run_scheduled_sync.sh --matchday 3 --matchday 4
+```
+
+Expected: one pass and no overlap. Logs/lock are under ignored `data/runtime/`.
+Inspect a stale lock before manual removal. Scheduler activation remains a manual
+user action described in `DEPLOYMENT_LOCAL.md`.
+
+This runbook is for manual execution by the project owner. Commands below are
+instructions only; they were not executed during the Stage 3 handoff.
+
+Never include `.env`, a password, or a complete connection string in returned
+output. Stop at the first failed prerequisite and report only the non-secret
+error and command.
+
+## 1. WSL prerequisites
+
+Where: WSL Bash. Working directory: `/mnt/f/sports-fixtures-change-tracker`.
 
 ```bash
 cd /mnt/f/sports-fixtures-change-tracker
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
-python -m pytest
+python -m pip install --editable '.[dev]'
+```
+
+Expected: editable installation completes without an error. If the environment
+is not already present, create it with `python3 -m venv .venv` first. The
+Windows host IP used by WSL can change after a WSL or network restart, so verify
+the current value in `.env` before any SQL Server operation.
+
+Historical owner-supplied Stage 0 evidence from 2026-11-02 records a successful
+editable installation, Ruff lint, Ruff formatting with 10 files formatted, and
+pytest with 5 tests in 0.13 seconds. It also records a successful database
+check against server `CANVASIT`, login `sports_tracker_app`, database
+`SportsFixturesTracker`, edition `Standard Developer Edition (64-bit)`, and
+version `17.0.1000.7`. Do not treat this historical evidence as Stage 3 import
+evidence.
+
+## 2. Static and offline checks
+
+Where: WSL Bash, same directory. These commands do not contact OpenLigaDB or
+SQL Server.
+
+```bash
 ruff check .
 ruff format --check .
-python scripts/fetch_openligadb.py --matchday 3
-python scripts/fetch_openligadb.py --matchday 3
-python scripts/fetch_openligadb.py --matchday 4
+python -m pytest -q
 ```
 
-Observed results supplied for the 2026-11-02 handoff:
+Expected: Ruff reports no violations, format check reports no required changes,
+and the tests pass. These checks are **NOT RUN** as part of this handoff.
 
-- Editable installation succeeded.
-- Ruff lint passed.
-- Ruff format checking passed with 14 files formatted.
-- pytest passed 15 tests in 0.50 seconds.
-- The source was curated UEFA Champions League 2026/27 (`ucl`, season `2026`, expected League ID `4946`).
-- Matchday 3 returned 18 matches: all 18 were completed, all had results, and all 18 match IDs were unique. The response was 76,432 bytes with SHA-256 `88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348`.
-- Two Matchday 3 snapshots were preserved at 09:47 and 10:24 UTC, with identical content hashes.
-- Matchday 4 returned 18 matches: all 18 were unfinished, all had empty `matchResults` arrays, and all 18 match IDs were unique. The response was 53,969 bytes with SHA-256 `a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245`.
-- The two matchdays contained 36 unique match IDs. Saved real responses confirmed completed and future-match shapes and included `HalfTime` and `After90Minutes` result types.
-- Raw response and metadata files are preserved under `data/raw/`, and `data/raw/` is Git-ignored. Do not add raw snapshot files, `.env`, `.env` contents, or passwords to Git.
+Locate the saved snapshot directories without changing them:
 
-Future or unfinished matches must keep scores as `NULL`; missing results must never be converted to zero. Interpret result entries explicitly by `resultType`, including `HalfTime` and `After90Minutes`, rather than choosing a score from an undifferentiated result list.
+```bash
+find data/raw/ucl/2026/matchday-3 -name metadata.json -print | sort
+find data/raw/ucl/2026/matchday-4 -name metadata.json -print | sort
+```
 
-The OpenLigaDB read limit is 60 requests per minute per IP. Do not use aggressive polling. Stage 1 fetches one requested matchday only and does not implement scheduling or repeated polling.
+## 3. Dry-run Matchday 3
 
-## Planned engineering evaluations — NOT RUN
+Where: WSL Bash, same directory. This reads local `response.json` and
+`metadata.json` only.
 
-These evaluations are planned for later SQL loading and change-tracking stages:
+```bash
+SNAPSHOT_M3="$(dirname "$(find data/raw/ucl/2026/matchday-3 -name metadata.json -print | sort | head -n 1)")"
+python scripts/import_snapshot.py --snapshot "$SNAPSHOT_M3" --dry-run
+```
 
-- **Idempotency:** replay an identical snapshot and verify no duplicate current rows, observed changes, or checkpoint updates.
-- **Change-detection accuracy:** compare controlled fixture variants and unchanged replays, measuring false positives and false negatives while interpreting result types explicitly.
-- **Transaction rollback:** inject a SQL Server batch failure and verify current records, change history, and successful checkpoints are not partially committed.
-- **Incremental request efficiency:** measure request counts for active matchdays and later refreshes while respecting the 60-requests-per-minute limit.
-- **Snapshot replay:** replay saved response bytes offline and verify hash, provenance, and deterministic downstream results without a network request.
+Expected success pattern:
 
-All five evaluations remain NOT RUN. SQL loading, change tracking, retries, recovery, API/UI work, and scheduling are also NOT RUN.
+```text
+Dry run passed: 18 matches, 36 results, 74 goals
+Snapshot SHA-256: 88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348
+```
 
-## Stage 2 SQL Server schema design
+The goal count is based on the inspected saved response and should be confirmed
+by this dry run. If the selected directory is one of the two identical
+Matchday 3 captures, the hash must be the value above.
 
-Status: Stage 2 schema design is implemented in `sql/001_initial_schema.sql` but NOT RUN. The script has not been parsed, executed, deployed, or verified against SQL Server. It creates missing dbo objects only, does not drop or alter existing objects, and issues no permissions. Do not run it as `sports_tracker_app`; that runtime login is intentionally not a DDL administrator.
+## 4. Dry-run Matchday 4
 
-The schema includes `competitions`, `competition_seasons`, `teams`, `matches`, `match_results`, `match_goals`, `import_runs`, `source_snapshots`, `validation_issues`, `match_changes`, `sync_checkpoints`, and `match_notes`. Raw response bytes remain on disk under Git-ignored `data/raw/`; `source_snapshots` stores metadata and paths only. Future matches retain no fabricated result rows or 0-0 scores. `HalfTime` and `After90Minutes` are distinct result types.
+```bash
+SNAPSHOT_M4="$(dirname "$(find data/raw/ucl/2026/matchday-4 -name metadata.json -print | sort | head -n 1)")"
+python scripts/import_snapshot.py --snapshot "$SNAPSHOT_M4" --dry-run
+```
 
-### SSMS, preflight checks before applying the DDL
+Expected success pattern:
 
-Where: SSMS, connected with the administrative Windows Authentication session, using a query window whose target is the existing `SportsFixturesTracker` database. Do not paste passwords or `.env` contents into SSMS or chat.
+```text
+Dry run passed: 18 matches, 0 results, 0 goals
+Snapshot SHA-256: a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245
+```
 
-Run this read-only preflight query first:
+The 18 future fixtures must remain unfinished and must not receive fabricated
+zero scores.
+
+## 5. Initial SQL Server import
+
+Where: WSL Bash, same directory. Target: the configured `SportsFixturesTracker`
+database on the SQL Server instance in `.env`.
+
+```bash
+python scripts/import_snapshot.py --snapshot "$SNAPSHOT_M3"
+python scripts/import_snapshot.py --snapshot "$SNAPSHOT_M4"
+```
+
+Expected: each command prints a successful import status, a run ID, the
+snapshot location/hash, and counts for matches/results/goals/changes. The first
+import establishes the baseline, so normal baseline change count is zero.
+
+If an import fails, the CLI now reports the named SQL operation and a sanitized
+underlying exception. It never prints the SQL statement, parameters, connection
+string, or password. Preserve only that non-secret diagnostic output for
+investigation; do not paste `.env` contents or raw snapshot files.
+
+The primary transaction contains teams, matches, results, goals, changes, and
+checkpoints. After a confirmed rollback, the importer may intentionally retain a
+source snapshot, competition/season rows, a `Failed` import run, and a validation
+issue as separate provenance. Those rows are not partial fixture data and must
+not be deleted as routine recovery. If the CLI says rollback failed or that state
+is unconfirmed, stop: do not retry the import until the database is inspected.
+
+`dbo.teams.team_icon_url` accepts only optional HTTP(S) URL metadata up to 2,048
+characters. OpenLigaDB embedded `data:` images and oversized URLs are imported as
+`NULL` with a warning that contains only a type/length summary; the snapshot and
+team/match identity remain usable.
+
+Identity-returning SQL batches may expose intermediate non-row results through
+ODBC; the importer advances through those result sets before reading the
+inserted identity. If the command still fails, return the complete non-secret
+error and operation name before retrying.
+
+Rerun the failed command only after recording the diagnostic. Then inspect the
+failed import run with the read-only query in Step 7 before retrying.
+
+Do not run a live API fetch as part of this procedure. These imports replay the
+immutable saved snapshots and are reproducible offline.
+
+### Read-only recovery inspection after a failed import
+
+Where: a confirmed SQL client. Target: `SportsFixturesTracker`.
 
 ```sql
-USE [SportsFixturesTracker];
-GO
+SELECT TOP (20)
+    ir.import_run_id,
+    ir.status,
+    ir.failure_phase,
+    ir.error_summary,
+    ir.started_at_utc,
+    ir.completed_at_utc,
+    ss.source_snapshot_id,
+    ss.local_directory,
+    ss.sha256
+FROM dbo.import_runs AS ir
+LEFT JOIN dbo.source_snapshots AS ss
+    ON ss.source_snapshot_id = ir.source_snapshot_id
+WHERE ir.provider = N'OpenLigaDB'
+ORDER BY ir.import_run_id DESC;
 
 SELECT
-    DB_NAME() AS database_name,
-    SUSER_SNAME() AS executing_login,
-    compatibility_level,
-    state_desc
-FROM sys.databases
-WHERE name = DB_NAME();
+    (SELECT COUNT(*) FROM dbo.teams WHERE provider = N'OpenLigaDB') AS teams,
+    (SELECT COUNT(*) FROM dbo.matches WHERE provider = N'OpenLigaDB') AS matches,
+    (SELECT COUNT(*) FROM dbo.match_results) AS results,
+    (SELECT COUNT(*) FROM dbo.match_goals) AS goals,
+    (SELECT COUNT(*) FROM dbo.match_changes) AS changes,
+    (SELECT COUNT(*) FROM dbo.sync_checkpoints WHERE provider = N'OpenLigaDB')
+        AS checkpoints;
 
-SELECT
-    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CONNECT') AS can_connect,
-    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE TABLE') AS can_create_table,
-    HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'ALTER') AS can_alter_database;
-
-SELECT
-    name AS existing_stage2_table
-FROM sys.tables
-WHERE schema_id = SCHEMA_ID(N'dbo')
-  AND name IN
-  (
-      N'competitions', N'competition_seasons', N'teams', N'matches',
-      N'match_results', N'match_goals', N'import_runs', N'source_snapshots',
-      N'validation_issues', N'match_changes', N'sync_checkpoints', N'match_notes'
-  )
-ORDER BY name;
+SELECT provider_team_id,
+       team_name,
+       CASE WHEN team_icon_url IS NULL THEN NULL ELSE LEN(team_icon_url) END
+           AS team_icon_url_characters
+FROM dbo.teams
+WHERE provider = N'OpenLigaDB'
+ORDER BY provider_team_id;
 ```
 
-Expected result: the database row shows `SportsFixturesTracker` and an online state; the first permission value is `1`; and the final query returns no rows unless a prior or unrelated schema already uses one of these names. If any named table already exists, stop and return only the table names for design review. If the session cannot connect or has no DDL capability, stop without running the schema.
+Purpose: distinguish intentional failed-run provenance from unexpected current
+domain rows without deleting anything. Return only the non-secret output. If the
+failure run reports a confirmed rollback and no unexpected current rows were
+created, rerun the same saved snapshot after completing the offline checks. If
+rollback was unconfirmed, stop and return this output for diagnosis.
 
-### SSMS, apply and verify the schema manually
+## 6. Idempotency replay
 
-After the preflight is clean, open `sql/001_initial_schema.sql` in the same administrative SSMS session, confirm its first executable statement is `USE [SportsFixturesTracker]`, and execute the complete script as one batch sequence. Expected result: SSMS reports successful completion without an error; no data-loading rows are inserted.
+Replay exactly the same Matchday 3 directory:
 
-Then run this read-only structural check:
+```bash
+python scripts/import_snapshot.py --snapshot "$SNAPSHOT_M3"
+```
+
+Expected: the run succeeds, but match/result/goal counts in the database do not
+increase and the new run reports zero business changes. The snapshot row is
+reused by provider and local directory rather than duplicated.
+
+Record the relevant run IDs and compare the database counts before and after.
+
+## 7. Database verification
+
+Where: a confirmed SQL Server client connected to `SportsFixturesTracker`.
+Execute the following read-only query after the imports:
 
 ```sql
-USE [SportsFixturesTracker];
-GO
-
-SELECT name AS table_name
-FROM sys.tables
-WHERE schema_id = SCHEMA_ID(N'dbo')
-  AND name IN
-  (
-      N'competitions', N'competition_seasons', N'teams', N'matches',
-      N'match_results', N'match_goals', N'import_runs', N'source_snapshots',
-      N'validation_issues', N'match_changes', N'sync_checkpoints', N'match_notes'
-  )
-ORDER BY name;
+SELECT status, COUNT(*) AS run_count
+FROM dbo.import_runs
+GROUP BY status;
 
 SELECT
-    OBJECT_SCHEMA_NAME(parent_object_id) AS parent_schema,
-    OBJECT_NAME(parent_object_id) AS parent_table,
-    name AS foreign_key_name,
-    OBJECT_NAME(referenced_object_id) AS referenced_table,
-    is_disabled
-FROM sys.foreign_keys
-WHERE parent_object_id IN
-(
-    SELECT object_id
-    FROM sys.tables
-    WHERE schema_id = SCHEMA_ID(N'dbo')
-      AND name IN
-      (
-          N'competitions', N'competition_seasons', N'teams', N'matches',
-          N'match_results', N'match_goals', N'import_runs', N'source_snapshots',
-          N'validation_issues', N'match_changes', N'sync_checkpoints', N'match_notes'
-      )
-)
-ORDER BY parent_table, foreign_key_name;
+    (SELECT COUNT(*) FROM dbo.matches) AS matches,
+    (SELECT COUNT(*) FROM dbo.match_results) AS results,
+    (SELECT COUNT(*) FROM dbo.match_goals) AS goals,
+    (SELECT COUNT(*) FROM dbo.match_changes) AS changes,
+    (SELECT COUNT(*) FROM dbo.source_snapshots) AS snapshots,
+    (SELECT COUNT(*) FROM dbo.sync_checkpoints) AS checkpoints,
+    (SELECT COUNT(*) FROM dbo.validation_issues) AS validation_issues;
+
+SELECT TOP (20)
+    import_run_id, status, source_snapshot_id, matches_seen, matches_inserted,
+    matches_updated, matches_unchanged, matches_rejected, results_seen,
+    validation_issue_count, failure_phase, error_summary,
+    started_at_utc, completed_at_utc
+FROM dbo.import_runs
+ORDER BY import_run_id DESC;
 ```
 
-Expected result: all twelve tables are listed, foreign keys are present and enabled, and no fixture or raw-response rows have been loaded. Return only the non-secret table and foreign-key output. Do not proceed to data loading; that belongs to a later stage.
+For a clean run against an otherwise empty Stage 2 database, after Matchday 3,
+Matchday 4, and one Matchday 3 replay, the expected domain counts are 36
+matches, 36 result rows, 74 goals, and zero changes from the replay. There are
+two source snapshots if one directory from each matchday was imported. There
+are three successful import runs. Existing rows from earlier manual checks or
+other experiments must be reported separately rather than treated as a failed
+expectation.
 
-Planned Stage 2 verification checks, all NOT RUN, are: duplicate provider match identity rejection; orphan foreign-key rejection; NULL/missing results for upcoming fixtures without fabricated 0-0 rows; distinct `HalfTime` and `After90Minutes` result rows; provenance for identical snapshot hashes captured at different times; idempotent reimport without duplicate fixture state or changes; field-level historical change recording; and transaction rollback with checkpoint recovery plus a separately persisted failure diagnostic.
+Verify that Matchday 4 has no result rows and that the 36 matches have unique
+provider match IDs. Verify that change count does not increase after replay.
 
-## Required format for future procedures
+## 8. Controlled change-history check
 
-Every procedure must identify:
-- Stage and prerequisites.
-- Terminal, SQL client, or browser.
-- Working directory, interpreter/environment, database, or API base address.
-- Exact command, SQL, request, or action.
-- Expected success pattern and what to do if it fails.
-- Non-secret evidence to return.
-- Whether the procedure has actually been verified.
+The ordinary unit tests use sanitized local fixtures and a memory store; they do
+not need SQL Server. Run them with:
 
-Do not insert guessed executable names or commands for code that does not yet exist. Add exact steps after Codex implements the corresponding files, then mark them verified only after the user supplies output.
+```bash
+python -m pytest tests/test_ingestion.py -q
+```
 
-## Project environment and dependencies
+The test cases cover initial import, duplicate replay, an updated score,
+unfinished matches, invalid records, and transaction failure/recovery. They
+must be reported as offline tests, not as SQL Server integration evidence.
 
-Status: Stage 0 project installation and checks are complete and verified from user-supplied evidence dated 2026-11-02.
+For a SQL Server integration check, use a disposable test database or a known
+isolated schema. Import a baseline fixture, import one fixture with an explicit
+full-time score change, and query `dbo.match_changes` for exactly one intended
+field transition. Replay that updated fixture and verify no second transition
+is created. Never test controlled changes against production data.
 
-User-reported evidence: Python 3.14.4 virtual environment created, pyodbc 5.3.0 installed, editable project installation succeeded, Ruff check passed, Ruff formatting check passed with 10 files formatted, and pytest passed 5 tests in 0.13 seconds. Do not modify Conda base.
+## 9. Rollback and recovery check
 
-## Database connection and schema
+Use the sanitized failure-injection test first. For SQL Server, arrange a
+controlled failure in an isolated test database only, then verify that current
+matches, results, goals, changes, and checkpoints have no partial rows. Confirm
+that a failed `import_runs` record is present when the failure occurred after a
+run could be recorded. Retry the same snapshot and verify that it succeeds
+without duplicates.
 
-Status: user-reported connection prerequisites, manual Python connection, and permanent project check are confirmed for Stage 0; no schema or ingestion work has started.
+## 10. Evaluation record
 
-User-reported target and verified check on 2026-11-02: SQL Server `CANVASIT`, Standard Developer Edition (64-bit), version `17.0.1000.7`; database `SportsFixturesTracker`; runtime login `sports_tracker_app`; TCP `172.20.80.1:1433`; ODBC Driver 18 installed; sqlcmd authentication succeeded. No password is recorded here. The Stage 0 script performs only its read-only metadata query; no tables or schema are created.
+Record, for each run:
 
-Record the actual current WSL-visible host if it differs after a restart. Keep actual passwords outside this document.
+- input snapshot hash and byte count;
+- valid/rejected match counts and validation issue codes;
+- matches/results/goals inserted, updated, and unchanged;
+- change rows created and whether each is a true controlled transition;
+- SQL import wall-clock latency and environment details;
+- counts before and after an identical replay;
+- rollback result and retry result.
 
-SQL intended for a query window must be labeled as SQL, with its target database. It must not be pasted into Bash.
+These measurements evaluate correctness, duplication rate, change-detection
+accuracy, transaction rollback, snapshot replay, and import latency. Incremental
+request efficiency and rate-limit compliance are future live-source evaluations;
+Stage 3 does not poll or schedule requests. OpenLigaDB’s 60-requests-per-minute
+limit must be respected, and aggressive polling is prohibited.
+## Manual recovery of the dedicated development database
 
-## Source capture, imports, and replay
+`sql/manual_reset_development_import_data.sql` is a **manual-only** recovery
+script for the current failed-import state. It is not a migration and is not
+called by the application. It applies only to the dedicated
+`SportsFixturesTracker` development database that was empty before the failed
+test imports; it must never be used to discard legitimate development, test, or
+production data.
 
-Status: Stage 1 retrieval and raw snapshot capture are implemented and manually verified from user-supplied evidence on 2026-11-02. Codex did not execute the verification. SQL loading, transformation, import, change tracking, retries, rollback, recovery, replay, and later source workflows remain NOT RUN.
+1. In SSMS, select `SportsFixturesTracker`, create a **full backup** through
+   **Tasks > Back Up...**, and wait for the SSMS success confirmation. This is
+   a prerequisite; the script never creates a backup automatically.
+2. Open the script and run its **PREVIEW ONLY** section. Confirm the database
+   name, one `source_snapshot_id` of `7`, import run `1` as `Started`, import
+   run `2` as `Failed`, both runs pointing to snapshot `7`, and the reported
+   development counts: 14 teams, 7 matches, 14 results, and 32 goals. Stop if
+   any value differs or if `match_notes` contains a row.
+3. Only after confirming that this is the disposable dedicated development
+   database, remove the two comment markers around the **DESTRUCTIVE EXECUTION**
+   section, replace `@confirmation`'s `NULL` value with
+   `N'RESET-DEDICATED-DEVELOPMENT-DATABASE'`, and run that section as one batch.
+   Its transaction requires server `CANVASIT`, repeats the scope checks, deletes
+   in foreign-key dependency order, and rolls back on an error.
+4. Run the preview section again. All twelve application tables listed by the
+   script must report zero rows. Do not start another import until this check is
+   clean.
 
-Current planned source scope: UEFA Champions League 2026/27 through OpenLigaDB shortcut `ucl`, season `2026`, league ID `4946`. Begin with Matchdays 3 and 4, then expand to all 144 league-phase fixtures and later knockout fixtures. No ingestion is complete or verified.
-
-Stage 1 capture commands and observed outputs are recorded above. After Stages 2–3, document commands to inspect provenance, validate, import, repeat unchanged input, inspect issues, and retry or replay an eligible failed input.
-
-Document the selected data scope and where raw responses and logs are retained. Keep controlled test changes separate from real collected data.
-
-## Tests
-
-Current status: the user reported that the complete test suite passed 15 tests in 0.50 seconds on 2026-11-02. This is user-supplied evidence; Codex did not run the tests. Any earlier pre-verification note stating that the Stage 1 tests were NOT RUN is historical and superseded by that report.
-
-Status: focused Stage 0 configuration tests were reported as passed on 2026-11-02: 5 tests in 0.13 seconds. The complete suite was subsequently reported as passed: 15 tests in 0.50 seconds. These are user-supplied results; Codex did not run the tests.
-
-Run `python -m pytest` from the active WSL virtual environment for the offline configuration tests. Keep separate procedures for SQL Server integration tests, live-source checks, API requests, browser checks, and scheduled-run checks.
-
-Use a dedicated test database for controlled changes and rollback demonstrations. Clearly identify any command that creates, changes, or removes test data. Never infer SQL Server correctness from an unrelated in-memory substitute.
-
-## API and browser
-
-Status: not implemented or verified.
-
-Record the actual local launch command and address after implementation. For each API example, include method, route, request body where needed, expected status, and important response fields.
-
-Record browser checks for filters, match history, import issues, and note creation/editing/deletion. Include empty and failed-request behavior.
-
-## Scheduling
-
-Status: scheduler not selected.
-
-After Stage 6, record setup, inspection, logs, disabling, and removal commands for the chosen scheduler. Use explicit interpreter and working-directory settings. State the requirements for the machine, WSL, and database to remain available.
-
-Only an actual scheduled run establishes that scheduling works.
-
-## Git review and publication
-
-The user performs all Git operations manually. Before publication, review the actual working tree and ignore rules. Commit and push instructions should refer to confirmed changes and the current branch.
-
-## Troubleshooting record
-
-Add entries only for problems actually encountered:
-- Symptom and exact failing step.
-- Relevant non-secret error.
-- Cause supported by the investigation.
-- Fix and any files changed.
-- User-run verification.
-- Remaining uncertainty, if any.
-
-Record missing evidence as unknown rather than supplying an invented successful result.
+The destructive block deliberately stops if the actual state differs from the
+reviewed recovery scope. Preserve the backup and return the non-secret SSMS
+error or output rather than broadening the deletion scope.
