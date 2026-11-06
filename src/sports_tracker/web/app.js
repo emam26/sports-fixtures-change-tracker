@@ -3,7 +3,7 @@ const ui = {
   health: document.querySelector("#health"),
   competitionContext: document.querySelector("#competition-context"),
   overviewStatus: document.querySelector("#overview-status"),
-  latestSync: document.querySelector("#latest-sync"),
+  lastUpdated: document.querySelector("#last-updated"),
   metricTotal: document.querySelector("#metric-total"),
   metricFinished: document.querySelector("#metric-finished"),
   metricUpcoming: document.querySelector("#metric-upcoming"),
@@ -24,10 +24,6 @@ const ui = {
   changePageDescription: document.querySelector("#change-page-description"),
   previousChangePage: document.querySelector("#change-page-previous"),
   nextChangePage: document.querySelector("#change-page-next"),
-  operationsStatus: document.querySelector("#operations-status"),
-  importRuns: document.querySelector("#import-runs"),
-  checkpoints: document.querySelector("#sync-checkpoints"),
-  validationIssues: document.querySelector("#validation-issues"),
   dialog: document.querySelector("#match-dialog"),
   matchDetail: document.querySelector("#match-detail"),
 };
@@ -43,7 +39,6 @@ const state = {
   fixturesLoading: false,
   matchdayRequestId: 0,
   noteWritesEnabled: false,
-  operationsRequestId: 0,
   overviewRequestId: 0,
 };
 
@@ -308,20 +303,22 @@ function renderSummary(summary) {
     setText(ui.metricChangesDetail, `Across ${formatCount(summary.changed_fixtures)} ${label}`);
   }
 
-  const latest = ui.latestSync;
-  latest.replaceChildren();
-  latest.append(element("span", { className: "sync-summary-label", text: "Latest successful checkpoint" }));
+  const lastUpdated = ui.lastUpdated;
+  lastUpdated.replaceChildren();
+  lastUpdated.append(
+    element("span", { className: "last-updated-label", text: "Last updated" }),
+  );
   if (summary.latest_successful_sync_at_utc) {
-    latest.append(
+    lastUpdated.append(
       element("strong", { text: formatDate(summary.latest_successful_sync_at_utc) }),
       element("span", {
-        text: `Snapshot ${valueOrNotSupplied(summary.latest_successful_snapshot_id)} / import run ${valueOrNotSupplied(summary.latest_successful_import_run_id)}`,
+        text: "Based on the latest successful synchronization recorded by the local database.",
       }),
     );
   } else {
-    latest.append(
+    lastUpdated.append(
       element("strong", { text: "Not recorded" }),
-      element("span", { text: "No successful checkpoint exists for this selection." }),
+      element("span", { text: "No completed synchronization is recorded for this selection." }),
     );
   }
 }
@@ -342,10 +339,10 @@ async function loadOverview() {
       (node) => setText(node, "—"),
     );
     setText(ui.metricChangesDetail, "Affected fixtures unavailable");
-    ui.latestSync.replaceChildren(
-      element("span", { className: "sync-summary-label", text: "Latest successful checkpoint" }),
+    ui.lastUpdated.replaceChildren(
+      element("span", { className: "last-updated-label", text: "Last updated" }),
       element("strong", { text: "Unavailable" }),
-      element("span", { text: "The checkpoint summary could not be loaded." }),
+      element("span", { text: "The latest synchronization timestamp could not be loaded." }),
     );
     const message = describeRequestFailure("Overview metrics", error);
     setStatus(ui.overviewStatus, message, "error");
@@ -864,114 +861,6 @@ async function showMatch(matchId, openDialog = true) {
   }
 }
 
-function importRunRow(run) {
-  const row = element("article", { className: "operation-row" });
-  const heading = element("div", { className: "operation-row-heading" });
-  heading.append(
-    element("strong", { text: `Import run ${run.import_run_id}` }),
-    statusPill(run.status),
-  );
-  const facts = element("dl", { className: "operation-facts" });
-  [
-    ["Started", formatDate(run.started_at_utc)],
-    ["Snapshot", compactHash(run.snapshot_sha256)],
-    ["Matchday", valueOrNotSupplied(run.matchday_number)],
-    ["Fixture records", `${valueOrNotSupplied(run.matches_seen)} seen / ${valueOrNotSupplied(run.matches_inserted)} inserted / ${valueOrNotSupplied(run.matches_updated)} updated`],
-  ].forEach(([label, value]) => {
-    facts.append(element("dt", { text: label }), element("dd", { text: value }));
-  });
-  row.append(heading, facts);
-  if (run.is_replay) row.append(element("p", { className: "metadata", text: "Replay of preserved source evidence." }));
-  if (run.error_message) row.append(element("p", { className: "inline-error", text: run.error_message }));
-  return row;
-}
-
-function checkpointRow(checkpoint) {
-  const row = element("article", { className: "operation-row" });
-  row.append(
-    element("strong", { text: `Matchday ${valueOrNotSupplied(checkpoint.matchday_number)}` }),
-    element("p", { className: "metadata", text: checkpoint.scope_key }),
-  );
-  const facts = element("dl", { className: "operation-facts" });
-  [
-    ["Processed", formatDate(checkpoint.last_processed_at_utc)],
-    ["Source update", formatDate(checkpoint.last_source_update_utc)],
-    ["Snapshot", valueOrNotSupplied(checkpoint.last_successful_snapshot_id)],
-    ["Import run", valueOrNotSupplied(checkpoint.last_successful_import_run_id)],
-  ].forEach(([label, value]) => {
-    facts.append(element("dt", { text: label }), element("dd", { text: value }));
-  });
-  row.append(facts);
-  return row;
-}
-
-function issueRow(issue) {
-  const row = element("article", { className: "operation-row validation-row" });
-  const heading = element("div", { className: "operation-row-heading" });
-  heading.append(
-    element("strong", { text: issue.issue_code }),
-    statusPill(issue.severity),
-  );
-  row.append(
-    heading,
-    element("p", { text: issue.message }),
-    element("p", { className: "metadata", text: formatDate(issue.created_at_utc) }),
-  );
-  return row;
-}
-
-function renderOperationRecords(container, records, formatter, emptyTitle, emptyDetail) {
-  if (!container) return;
-  container.replaceChildren();
-  if (records.length === 0) {
-    container.append(contentState(emptyTitle, emptyDetail));
-    return;
-  }
-  records.forEach((record) => container.append(formatter(record)));
-}
-
-async function loadOperations() {
-  const requestId = ++state.operationsRequestId;
-  setStatus(ui.operationsStatus, "Loading import and synchronization records...", "loading");
-  [ui.importRuns, ui.checkpoints, ui.validationIssues].forEach((container) => {
-    setBusy(container, true);
-    container.replaceChildren(contentState("Loading records", "Querying the local operations API.", "loading"));
-  });
-  const results = await Promise.allSettled([
-    request("/api/import-runs?limit=20"),
-    request("/api/sync-checkpoints?limit=20"),
-    request("/api/validation-issues?limit=20"),
-  ]);
-  if (requestId !== state.operationsRequestId) return;
-  const definitions = [
-    [ui.importRuns, results[0], importRunRow, "No import runs", "No source import provenance is recorded yet."],
-    [ui.checkpoints, results[1], checkpointRow, "No checkpoints", "No successful processing checkpoint is recorded yet."],
-    [ui.validationIssues, results[2], issueRow, "No validation evidence", "No validation warnings or errors are recorded."],
-  ];
-  let failures = 0;
-  definitions.forEach(([container, result, formatter, emptyTitle, emptyDetail]) => {
-    if (result.status === "fulfilled") {
-      renderOperationRecords(container, result.value, formatter, emptyTitle, emptyDetail);
-    } else {
-      failures += 1;
-      renderListState(
-        container,
-        "Records are unavailable",
-        describeRequestFailure("This operational feed", result.reason),
-        "error",
-      );
-    }
-    setBusy(container, false);
-  });
-  if (failures) {
-    const message = `${failures} operational feed${failures === 1 ? " is" : "s are"} unavailable.`;
-    setStatus(ui.operationsStatus, `${message} Review the cards for safe details.`, "error");
-    showAppAlert(message);
-  } else {
-    setStatus(ui.operationsStatus, "Import, checkpoint, and validation records updated.", "ok");
-  }
-}
-
 async function refreshDashboard() {
   clearAppAlert();
   const competitionsLoaded = await loadCompetitions();
@@ -982,7 +871,6 @@ async function refreshDashboard() {
     loadOverview(),
     loadFixtures(),
     loadChanges({ reset: true }),
-    loadOperations(),
   ]);
 }
 
@@ -1021,7 +909,6 @@ function attachEventListeners() {
   });
   document.querySelector("#refresh-dashboard").addEventListener("click", refreshDashboard);
   document.querySelector("#refresh-changes").addEventListener("click", loadChanges);
-  document.querySelector("#refresh-operations").addEventListener("click", loadOperations);
   ui.previousChangePage.addEventListener("click", async () => {
     if (ui.previousChangePage.disabled) return;
     state.changeOffset = Math.max(0, state.changeOffset - state.changePageSize);

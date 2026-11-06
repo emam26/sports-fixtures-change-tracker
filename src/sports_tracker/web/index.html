@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Local UEFA Champions League fixture, source history, and synchronization dashboard"
+      content="Local UEFA Champions League fixtures and observed change dashboard"
     >
     <title>Sports Fixtures &amp; Change Tracker</title>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230a1b35'/%3E%3Cpath d='M16 32h32M32 16v32' stroke='%2390bdfb' stroke-width='6'/%3E%3C/svg%3E"
     >
-    <link rel="stylesheet" href="/assets/styles.css?v=20261106-audit">
-    <script src="/assets/app.js?v=20261106-audit" defer></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=20261106-public-dashboard">
+    <script src="/assets/app.js?v=20261106-public-dashboard" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -23,10 +23,6 @@
         <div class="brand-block">
           <p class="eyebrow">Local football data intelligence</p>
           <h1>Fixtures &amp; Change Tracker</h1>
-          <p class="lede">
-            Verified source observations, current fixtures, and import health for the
-            competitions loaded in your local SQL Server database.
-          </p>
         </div>
         <div class="service-card" aria-label="Service status">
           <span class="service-label">Database service</span>
@@ -42,7 +38,6 @@
         <a href="#overview">Overview</a>
         <a href="#match-explorer">Match explorer</a>
         <a href="#change-intelligence">Change intelligence</a>
-        <a href="#operations">Import &amp; sync monitor</a>
       </div>
     </nav>
 
@@ -67,10 +62,10 @@
               Loading aggregate metrics from the local API…
             </p>
           </div>
-          <div id="latest-sync" class="sync-summary">
-            <span class="sync-summary-label">Latest successful checkpoint</span>
+          <div id="last-updated" class="last-updated" role="status" aria-live="polite">
+            <span class="last-updated-label">Last updated</span>
             <strong>Loading…</strong>
-            <span>Successful import provenance will appear here.</span>
+            <span>Waiting for the latest completed synchronization timestamp.</span>
           </div>
         </div>
 
@@ -217,47 +212,6 @@
         </nav>
       </section>
 
-      <section id="operations" class="dashboard-section" aria-labelledby="operations-title">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Provenance and processing state</p>
-            <h2 id="operations-title">Import &amp; sync monitor</h2>
-          </div>
-          <button id="refresh-operations" class="button button-secondary" type="button">
-            Refresh monitor
-          </button>
-        </div>
-        <p class="section-intro">
-          A captured source snapshot is evidence. It becomes current fixture data only after a
-          successful transactional import and checkpoint update.
-        </p>
-        <p id="operations-status" class="status-message" role="status" aria-live="polite">
-          Loading import and synchronization records…
-        </p>
-        <div class="operations-grid">
-          <article class="operations-card">
-            <div class="card-heading">
-              <h3>Import runs</h3>
-              <span>Latest 20</span>
-            </div>
-            <div id="import-runs" class="record-stack" aria-live="polite"></div>
-          </article>
-          <article class="operations-card">
-            <div class="card-heading">
-              <h3>Synchronization checkpoints</h3>
-              <span>Committed only</span>
-            </div>
-            <div id="sync-checkpoints" class="record-stack" aria-live="polite"></div>
-          </article>
-          <article class="operations-card">
-            <div class="card-heading">
-              <h3>Validation evidence</h3>
-              <span>Warnings &amp; errors</span>
-            </div>
-            <div id="validation-issues" class="record-stack" aria-live="polite"></div>
-          </article>
-        </div>
-      </section>
     </main>
 
     <dialog id="match-dialog" class="match-dialog" aria-labelledby="dialog-title">
