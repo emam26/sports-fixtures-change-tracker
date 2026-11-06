@@ -40,6 +40,10 @@ class OpenLigaDBContractError(OpenLigaDBError):
     """Raised when the response does not match the basic source contract."""
 
 
+class OpenLigaDBDiscoveryError(OpenLigaDBError):
+    """Raised when documented season-discovery endpoints identify no matchdays."""
+
+
 @dataclass(frozen=True)
 class OpenLigaDBResponse:
     """The validated response and the exact bytes returned by OpenLigaDB."""
@@ -50,6 +54,27 @@ class OpenLigaDBResponse:
     status_code: int
     content_type: str | None
     retrieved_at_utc: str
+
+
+@dataclass(frozen=True)
+class OpenLigaDBGroup:
+    """One provider-advertised matchday group."""
+
+    group_order_id: int
+    group_id: int | None
+    group_name: str | None
+
+
+@dataclass(frozen=True)
+class SeasonDiscovery:
+    """A source-backed comparison of documented season-discovery endpoints."""
+
+    available_groups_url: str
+    full_season_url: str
+    available_group_matchdays: tuple[int, ...]
+    full_season_matchdays: tuple[int, ...]
+    candidate_matchdays: tuple[int, ...]
+    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -114,6 +139,24 @@ def build_matchday_url(settings: OpenLigaDBSettings, matchday: int) -> str:
     return f"{base_url}/getmatchdata/{shortcut}/{season}/{selected_matchday}"
 
 
+def build_season_url(settings: OpenLigaDBSettings) -> str:
+    """Build the documented full-season match-data URL."""
+
+    base_url = _validated_base_url(settings.base_url)
+    shortcut = quote(settings.shortcut, safe="")
+    season = quote(str(settings.season), safe="")
+    return f"{base_url}/getmatchdata/{shortcut}/{season}"
+
+
+def build_available_groups_url(settings: OpenLigaDBSettings) -> str:
+    """Build the documented source route listing available season groups."""
+
+    base_url = _validated_base_url(settings.base_url)
+    shortcut = quote(settings.shortcut, safe="")
+    season = quote(str(settings.season), safe="")
+    return f"{base_url}/getavailablegroups/{shortcut}/{season}"
+
+
 def build_last_change_url(settings: OpenLigaDBSettings, matchday: int) -> str:
     """Build the documented matchday last-change URL."""
 
@@ -146,6 +189,67 @@ def _validate_records(records: Any, settings: OpenLigaDBSettings) -> list[dict[s
                 raise OpenLigaDBContractError(f"OpenLigaDB record {index} has unexpected {field}")
         validated_records.append(record)
     return validated_records
+
+
+def _validate_available_groups(payload: Any) -> tuple[OpenLigaDBGroup, ...]:
+    """Validate provider group metadata without inferring unavailable rounds."""
+
+    if not isinstance(payload, list):
+        raise OpenLigaDBContractError(
+            "OpenLigaDB available-groups response top level must be a list"
+        )
+    groups: list[OpenLigaDBGroup] = []
+    seen_orders: set[int] = set()
+    for index, value in enumerate(payload):
+        if not isinstance(value, dict):
+            raise OpenLigaDBContractError(f"OpenLigaDB group {index} must be an object")
+        group_order_id = value.get("groupOrderID")
+        if (
+            isinstance(group_order_id, bool)
+            or not isinstance(group_order_id, int)
+            or group_order_id <= 0
+        ):
+            raise OpenLigaDBContractError(f"OpenLigaDB group {index} has no positive groupOrderID")
+        if group_order_id in seen_orders:
+            raise OpenLigaDBContractError(
+                f"OpenLigaDB available-groups response duplicates groupOrderID {group_order_id}"
+            )
+        group_id = value.get("groupID")
+        if group_id is not None and (
+            isinstance(group_id, bool) or not isinstance(group_id, int) or group_id <= 0
+        ):
+            raise OpenLigaDBContractError(f"OpenLigaDB group {index} has an invalid groupID")
+        group_name = value.get("groupName")
+        if group_name is not None and not isinstance(group_name, str):
+            raise OpenLigaDBContractError(f"OpenLigaDB group {index} has an invalid groupName")
+        normalized_group_name = group_name.strip() if isinstance(group_name, str) else None
+        groups.append(
+            OpenLigaDBGroup(
+                group_order_id=group_order_id,
+                group_id=group_id,
+                group_name=normalized_group_name or None,
+            )
+        )
+        seen_orders.add(group_order_id)
+    return tuple(groups)
+
+
+def _matchdays_from_season_records(records: list[dict[str, Any]]) -> tuple[int, ...]:
+    """Extract only explicit positive source group orders from full-season records."""
+
+    matchdays: set[int] = set()
+    for record in records:
+        group = record.get("group")
+        if not isinstance(group, dict):
+            continue
+        group_order_id = group.get("groupOrderID")
+        if (
+            isinstance(group_order_id, int)
+            and not isinstance(group_order_id, bool)
+            and group_order_id > 0
+        ):
+            matchdays.add(group_order_id)
+    return tuple(sorted(matchdays))
 
 
 class OpenLigaDBClient:
@@ -210,38 +314,98 @@ class OpenLigaDBClient:
             return response
         raise AssertionError("bounded retry loop exhausted without returning")
 
-    def fetch_matchday(self, matchday: int) -> OpenLigaDBResponse:
-        """Fetch and contract-check one matchday without polling or scheduling."""
-
-        url = build_matchday_url(self.settings, matchday)
-        response = self._request(url, f"matchday {matchday}")
-
+    def _json_response(self, url: str, operation: str) -> tuple[httpx.Response, Any]:
+        response = self._request(url, operation)
         if not 200 <= response.status_code < 300:
             raise OpenLigaDBHTTPError(
-                f"OpenLigaDB returned HTTP {response.status_code} for matchday {matchday}"
+                f"OpenLigaDB returned HTTP {response.status_code} for {operation}"
             )
-
-        body = response.content
-        if not body:
-            raise OpenLigaDBEmptyBodyError(
-                f"OpenLigaDB returned an empty body for matchday {matchday}"
-            )
+        if not response.content:
+            raise OpenLigaDBEmptyBodyError(f"OpenLigaDB returned an empty body for {operation}")
         try:
-            decoded = json.loads(body)
+            return response, json.loads(response.content)
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
             raise OpenLigaDBInvalidJSONError(
-                f"OpenLigaDB returned invalid JSON for matchday {matchday}"
+                f"OpenLigaDB returned invalid JSON for {operation}"
             ) from exc
 
+    def _records_response(self, url: str, operation: str) -> OpenLigaDBResponse:
+        response, decoded = self._json_response(url, operation)
         records = _validate_records(decoded, self.settings)
         retrieved_at_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return OpenLigaDBResponse(
             records=records,
-            body=body,
+            body=response.content,
             url=url,
             status_code=response.status_code,
             content_type=response.headers.get("content-type"),
             retrieved_at_utc=retrieved_at_utc,
+        )
+
+    def fetch_matchday(self, matchday: int) -> OpenLigaDBResponse:
+        """Fetch and contract-check one matchday without polling or scheduling."""
+
+        url = build_matchday_url(self.settings, matchday)
+        return self._records_response(url, f"matchday {matchday}")
+
+    def fetch_season(self) -> OpenLigaDBResponse:
+        """Fetch the documented full-season source view for discovery only."""
+
+        return self._records_response(build_season_url(self.settings), "full season")
+
+    def fetch_available_groups(self) -> tuple[OpenLigaDBGroup, ...]:
+        """Fetch the provider's explicitly advertised groups for the configured season."""
+
+        url = build_available_groups_url(self.settings)
+        _, decoded = self._json_response(url, "available groups")
+        return _validate_available_groups(decoded)
+
+    def discover_matchdays(self) -> SeasonDiscovery:
+        """Compare both documented discovery views without treating either as complete truth."""
+
+        available_groups_url = build_available_groups_url(self.settings)
+        full_season_url = build_season_url(self.settings)
+        warnings: list[str] = []
+        available_matchdays: tuple[int, ...] = ()
+        full_season_matchdays: tuple[int, ...] = ()
+
+        try:
+            available_matchdays = tuple(
+                group.group_order_id for group in self.fetch_available_groups()
+            )
+        except OpenLigaDBError as exc:
+            warnings.append(f"available-groups endpoint unavailable ({type(exc).__name__})")
+
+        try:
+            full_season_matchdays = _matchdays_from_season_records(self.fetch_season().records)
+        except OpenLigaDBError as exc:
+            warnings.append(f"full-season endpoint unavailable ({type(exc).__name__})")
+
+        candidate_matchdays = tuple(sorted(set(available_matchdays) | set(full_season_matchdays)))
+        if not candidate_matchdays:
+            raise OpenLigaDBDiscoveryError(
+                "OpenLigaDB season discovery returned no explicit positive matchday groups"
+            )
+        if available_matchdays and full_season_matchdays:
+            available_only = sorted(set(available_matchdays) - set(full_season_matchdays))
+            season_only = sorted(set(full_season_matchdays) - set(available_matchdays))
+            if available_only:
+                warnings.append(
+                    "available-groups only matchdays: "
+                    + ", ".join(str(matchday) for matchday in available_only)
+                )
+            if season_only:
+                warnings.append(
+                    "full-season only matchdays: "
+                    + ", ".join(str(matchday) for matchday in season_only)
+                )
+        return SeasonDiscovery(
+            available_groups_url=available_groups_url,
+            full_season_url=full_season_url,
+            available_group_matchdays=available_matchdays,
+            full_season_matchdays=full_season_matchdays,
+            candidate_matchdays=candidate_matchdays,
+            warnings=tuple(warnings),
         )
 
     def fetch_last_change(self, matchday: int) -> LastChangeSignal:

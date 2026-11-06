@@ -112,6 +112,44 @@ def test_load_openligadb_settings_from_environment(tmp_path: Path) -> None:
     assert settings.expected_league_id == 4946
     assert settings.timeout_seconds == 10.0
     assert settings.raw_snapshot_directory == Path("data/raw")
+    assert settings.expected_league_phase_matchdays == tuple(range(1, 9))
+    assert settings.expected_fixtures_per_matchday == 18
+
+
+def test_openligadb_league_phase_expectations_are_configurable(tmp_path: Path) -> None:
+    values = {
+        "OPENLIGADB_BASE_URL": "https://api.openligadb.de",
+        "OPENLIGADB_SHORTCUT": "ucl",
+        "OPENLIGADB_SEASON": "2026",
+        "OPENLIGADB_EXPECTED_LEAGUE_ID": "4946",
+        "OPENLIGADB_TIMEOUT_SECONDS": "10",
+        "RAW_SNAPSHOT_DIRECTORY": "data/raw",
+        "OPENLIGADB_LEAGUE_PHASE_MATCHDAYS": "1,2,3,4,5,6,7,8",
+        "OPENLIGADB_EXPECTED_FIXTURES_PER_MATCHDAY": "18",
+    }
+
+    settings = load_openligadb_settings(
+        dotenv_path=tmp_path / "missing.env",
+        environ=values,
+    )
+
+    assert settings.expected_league_phase_matchdays == tuple(range(1, 9))
+    assert settings.expected_fixtures_per_matchday == 18
+
+
+def test_openligadb_league_phase_matchdays_reject_duplicates(tmp_path: Path) -> None:
+    values = {
+        "OPENLIGADB_BASE_URL": "https://api.openligadb.de",
+        "OPENLIGADB_SHORTCUT": "ucl",
+        "OPENLIGADB_SEASON": "2026",
+        "OPENLIGADB_EXPECTED_LEAGUE_ID": "4946",
+        "OPENLIGADB_TIMEOUT_SECONDS": "10",
+        "RAW_SNAPSHOT_DIRECTORY": "data/raw",
+        "OPENLIGADB_LEAGUE_PHASE_MATCHDAYS": "1,2,2",
+    }
+
+    with pytest.raises(ConfigurationError, match="OPENLIGADB_LEAGUE_PHASE_MATCHDAYS"):
+        load_openligadb_settings(dotenv_path=tmp_path / "missing.env", environ=values)
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
@@ -148,3 +186,11 @@ def test_sync_backoff_must_be_finite(tmp_path: Path, key: str, value: str) -> No
             dotenv_path=tmp_path / "missing.env",
             environ=values,
         )
+
+
+def test_sync_defaults_to_source_discovery_with_knockout_opt_in_disabled(tmp_path: Path) -> None:
+    settings = load_sync_settings(dotenv_path=tmp_path / "missing.env", environ={})
+
+    assert settings.matchdays == ()
+    assert settings.discover_matchdays is True
+    assert settings.include_post_league_phase is False

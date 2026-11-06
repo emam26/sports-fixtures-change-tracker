@@ -61,6 +61,8 @@ class OpenLigaDBSettings:
     timeout_seconds: float
     raw_snapshot_directory: Path
     user_agent: str = "sports-fixtures-change-tracker/0.1 (OpenLigaDB client)"
+    expected_league_phase_matchdays: tuple[int, ...] = tuple(range(1, 9))
+    expected_fixtures_per_matchday: int = 18
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,8 @@ class SyncSettings:
     backoff_max_seconds: float
     lock_file: Path
     log_directory: Path
+    discover_matchdays: bool = True
+    include_post_league_phase: bool = False
 
 
 @dataclass(frozen=True, repr=False)
@@ -245,6 +249,54 @@ def _optional_nonnegative_int(
     return value
 
 
+def _optional_positive_int(
+    values: Mapping[str, str],
+    key: str,
+    *,
+    default: int,
+) -> int:
+    raw_value = values.get(key)
+    if raw_value is None or not str(raw_value).strip():
+        return default
+    try:
+        value = int(str(raw_value).strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"Setting {key} must be an integer") from exc
+    if value <= 0:
+        raise ConfigurationError(f"Setting {key} must be greater than zero")
+    return value
+
+
+def _positive_int_list(
+    values: Mapping[str, str],
+    key: str,
+    *,
+    default: tuple[int, ...],
+    allow_empty: bool,
+) -> tuple[int, ...]:
+    """Read a comma-separated, duplicate-free sequence of positive matchdays."""
+
+    raw_value = values.get(key)
+    if raw_value is None:
+        return default
+    text = str(raw_value).strip()
+    if not text:
+        if allow_empty:
+            return ()
+        raise ConfigurationError(f"Setting {key} must contain at least one positive integer")
+    try:
+        parsed = tuple(int(item.strip()) for item in text.split(","))
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"Setting {key} must be a comma-separated list of integers"
+        ) from exc
+    if any(matchday <= 0 for matchday in parsed):
+        raise ConfigurationError(f"Setting {key} must contain only positive integers")
+    if len(set(parsed)) != len(parsed):
+        raise ConfigurationError(f"Setting {key} must not contain duplicates")
+    return tuple(sorted(parsed))
+
+
 def load_openligadb_settings(
     dotenv_path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
@@ -268,6 +320,17 @@ def load_openligadb_settings(
         raise ConfigurationError("OPENLIGADB_TIMEOUT_SECONDS must be greater than zero")
 
     raw_directory = _required_value(values, "RAW_SNAPSHOT_DIRECTORY").strip()
+    expected_league_phase_matchdays = _positive_int_list(
+        values,
+        "OPENLIGADB_LEAGUE_PHASE_MATCHDAYS",
+        default=tuple(range(1, 9)),
+        allow_empty=False,
+    )
+    expected_fixtures_per_matchday = _optional_positive_int(
+        values,
+        "OPENLIGADB_EXPECTED_FIXTURES_PER_MATCHDAY",
+        default=18,
+    )
     return OpenLigaDBSettings(
         base_url=base_url,
         shortcut=shortcut,
@@ -275,6 +338,8 @@ def load_openligadb_settings(
         expected_league_id=expected_league_id,
         timeout_seconds=timeout_seconds,
         raw_snapshot_directory=Path(raw_directory),
+        expected_league_phase_matchdays=expected_league_phase_matchdays,
+        expected_fixtures_per_matchday=expected_fixtures_per_matchday,
     )
 
 
@@ -285,17 +350,12 @@ def load_sync_settings(
     """Load conservative synchronization, retry, lock, and log settings."""
 
     values = _merged_values(dotenv_path, environ)
-    matchdays_text = str(values.get("OPENLIGADB_MATCHDAYS", "3,4")).strip()
-    try:
-        matchdays = tuple(int(item.strip()) for item in matchdays_text.split(","))
-    except ValueError as exc:
-        raise ConfigurationError(
-            "OPENLIGADB_MATCHDAYS must be a comma-separated list of integers"
-        ) from exc
-    if not matchdays or any(matchday <= 0 for matchday in matchdays):
-        raise ConfigurationError("OPENLIGADB_MATCHDAYS must contain positive integers")
-    if len(set(matchdays)) != len(matchdays):
-        raise ConfigurationError("OPENLIGADB_MATCHDAYS must not contain duplicates")
+    matchdays = _positive_int_list(
+        values,
+        "OPENLIGADB_MATCHDAYS",
+        default=(),
+        allow_empty=True,
+    )
 
     max_retries = _optional_nonnegative_int(
         values,
@@ -330,6 +390,16 @@ def load_sync_settings(
         backoff_max_seconds=backoff_max,
         lock_file=Path(lock_file),
         log_directory=Path(log_directory),
+        discover_matchdays=_boolean_value(
+            values,
+            "OPENLIGADB_DISCOVER_MATCHDAYS",
+            default=True,
+        ),
+        include_post_league_phase=_boolean_value(
+            values,
+            "OPENLIGADB_INCLUDE_POST_LEAGUE_PHASE",
+            default=False,
+        ),
     )
 
 

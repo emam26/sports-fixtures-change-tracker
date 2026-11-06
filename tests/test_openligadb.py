@@ -14,6 +14,8 @@ from sports_tracker.openligadb import (
     OpenLigaDBInvalidJSONError,
     OpenLigaDBNetworkError,
     OpenLigaDBResponse,
+    build_available_groups_url,
+    build_season_url,
 )
 from sports_tracker.snapshots import SnapshotAlreadyExistsError, save_raw_snapshot
 
@@ -67,6 +69,109 @@ def test_builds_the_expected_matchday_endpoint(tmp_path: Path) -> None:
     OpenLigaDBClient(settings, transport=httpx.MockTransport(handler)).fetch_matchday(3)
 
     assert requested_urls == ["https://api.openligadb.de/getmatchdata/ucl/2026/3"]
+
+
+def test_builds_documented_season_discovery_endpoints(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+
+    assert build_season_url(settings) == "https://api.openligadb.de/getmatchdata/ucl/2026"
+    assert (
+        build_available_groups_url(settings)
+        == "https://api.openligadb.de/getavailablegroups/ucl/2026"
+    )
+
+
+def test_discovery_compares_available_groups_and_full_season_with_mock_transport(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    requested_urls: list[str] = []
+    season_body = json.dumps(
+        [
+            {
+                "matchID": 101,
+                "leagueShortcut": "ucl",
+                "leagueSeason": 2026,
+                "leagueId": 4946,
+                "group": {"groupOrderID": 1},
+            },
+            {
+                "matchID": 102,
+                "leagueShortcut": "ucl",
+                "leagueSeason": 2026,
+                "leagueId": 4946,
+                "group": {"groupOrderID": 3},
+            },
+        ]
+    ).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path.endswith("/getavailablegroups/ucl/2026"):
+            return _response_for(
+                request,
+                b'[{"groupID":1,"groupOrderID":1,"groupName":"Matchday 1"},'
+                b'{"groupID":3,"groupOrderID":3,"groupName":"Matchday 3"}]',
+            )
+        if request.url.path.endswith("/getmatchdata/ucl/2026"):
+            return _response_for(request, season_body)
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    discovery = OpenLigaDBClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+    ).discover_matchdays()
+
+    assert requested_urls == [
+        "https://api.openligadb.de/getavailablegroups/ucl/2026",
+        "https://api.openligadb.de/getmatchdata/ucl/2026",
+    ]
+    assert discovery.available_group_matchdays == (1, 3)
+    assert discovery.full_season_matchdays == (1, 3)
+    assert discovery.candidate_matchdays == (1, 3)
+    assert discovery.warnings == ()
+
+
+def test_discovery_retains_endpoint_disagreement_without_dropping_candidates(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    season_body = json.dumps(
+        [
+            {
+                "matchID": 101,
+                "leagueShortcut": "ucl",
+                "leagueSeason": 2026,
+                "leagueId": 4946,
+                "group": {"groupOrderID": 1},
+            },
+            {
+                "matchID": 103,
+                "leagueShortcut": "ucl",
+                "leagueSeason": 2026,
+                "leagueId": 4946,
+                "group": {"groupOrderID": 3},
+            },
+        ]
+    ).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/getavailablegroups/ucl/2026"):
+            return _response_for(
+                request,
+                b'[{"groupID":1,"groupOrderID":1,"groupName":"Matchday 1"},'
+                b'{"groupID":2,"groupOrderID":2,"groupName":"Matchday 2"}]',
+            )
+        return _response_for(request, season_body)
+
+    discovery = OpenLigaDBClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+    ).discover_matchdays()
+
+    assert discovery.candidate_matchdays == (1, 2, 3)
+    assert any("available-groups only matchdays: 2" in warning for warning in discovery.warnings)
+    assert any("full-season only matchdays: 3" in warning for warning in discovery.warnings)
 
 
 def test_successful_raw_snapshot_preserves_bytes_and_metadata(tmp_path: Path) -> None:
