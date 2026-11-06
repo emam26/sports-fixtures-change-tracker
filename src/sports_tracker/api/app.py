@@ -11,11 +11,13 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
-    Path as PathParameter,
     Query,
     Request,
     Response,
     status,
+)
+from fastapi import (
+    Path as PathParameter,
 )
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
