@@ -299,16 +299,28 @@ Base address: `http://127.0.0.1:8000`
 1. Open `/health`; expect `status=ok`, `database=available`.
 2. Open `/docs`; inspect the documented status, competition, matchday, fixture,
    checkpoint, import, validation, and note endpoints.
-3. Open `/`; expect dynamic competition and Matchday 3/4 options.
-4. Filter by matchday, status, and team; clear each filter and confirm recovery.
-5. Open completed and unfinished fixture details. Confirm future score reads "Not
-   supplied", while completed results retain explicit types.
-6. Inspect changes, import runs, validation issues, and synchronization checkpoints.
-7. Use keyboard-only navigation and a narrow browser width; confirm focus and dialog
-   controls remain usable.
-8. With default configuration, confirm note-write controls are absent and note writes
-   return 403 in `/docs`.
-9. Stop Uvicorn with Ctrl+C.
+3. Open `/` with a hard reload. Confirm the overview, match explorer, change
+   intelligence, and import/sync monitor show visible loading or data states; they
+   must not collapse into an unexplained blank content area.
+4. In browser developer tools, confirm `/assets/styles.css` and `/assets/app.js`
+   return `200`; return the non-secret console/network diagnostic if either fails.
+5. Confirm the competition selector and matchdays are discovered from the database.
+   Select the available season and confirm overview values refresh.
+6. Filter by matchday, status, team, and kickoff order; clear filters and confirm
+   recovery. An unmatched team search must show a useful empty state.
+7. Open completed and unfinished fixture details. Confirm future score reads "Not
+   supplied", while completed results retain explicit types and goal events.
+8. Inspect global and per-fixture changes. Confirm before/after values, observation
+   time, and source snapshot identity appear only for recorded business changes.
+9. Inspect import runs, validation issues, and synchronization checkpoints. A source
+   snapshot is not a successful import until its run/checkpoint evidence says so.
+10. Use keyboard-only navigation and a narrow browser width; confirm focus and dialog
+    controls remain usable. After the page initially loads, simulate offline mode in
+    browser developer tools and use a dashboard refresh button; expect a visible safe
+    API error panel rather than silent disappearance.
+11. With default configuration, confirm note-write controls explain that writes are
+    disabled and note writes return 403 in `/docs`.
+12. Stop Uvicorn with Ctrl+C.
 
 If local note writes are deliberately enabled in `.env`, use a new local token of at
 least 16 characters, restart the API, and test create/edit/archive through the

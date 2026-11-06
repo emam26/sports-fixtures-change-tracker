@@ -141,9 +141,10 @@ parameterized SQL, and loopback middleware. The repository queries the deployed
 column names directly. Nullable database scores remain nullable in API responses.
 Unhandled failures return a generic response and log only the exception type.
 
-The API provides health/status, competition-season and matchday discovery, fixture
-list/detail, explicit results and goals, field changes, import runs, validation
-issues, synchronization checkpoints, and local-note CRUD.
+The API provides health/status, competition-season and matchday discovery, a
+season-scoped dashboard aggregate, fixture list/detail, explicit results and goals,
+per-fixture and cross-fixture field changes with source-snapshot provenance, import
+runs, validation issues, synchronization checkpoints, and local-note CRUD.
 
 Note writes are disabled by default. When enabled, they require a separate local
 token. The browser holds that token only in page memory and sends it only in the
@@ -152,10 +153,13 @@ or written to logs. This is a single-machine safety gate, not internet-grade
 authentication. Notes are application-owned and cannot update source fixtures,
 results, goals, changes, snapshots, or checkpoints.
 
-The framework-free dashboard discovers loaded competition seasons and matchdays,
-filters fixtures, distinguishes missing scores, presents result/goal provenance,
-shows changes and operational status, and optionally manages local notes. Source
-text is assigned with `textContent`, not HTML injection.
+The framework-free dashboard has four API-backed sections: overview metrics,
+match explorer, change intelligence, and import/synchronization monitoring. It
+discovers loaded competition seasons and matchdays, filters and locally orders
+fixtures by kickoff, distinguishes missing scores, presents explicit result/goal
+types and snapshot provenance, and optionally manages local notes. Every section
+starts with a visible loading shell and renders an explicit empty or safe failure
+state. Source text is assigned with `textContent`, not HTML injection.
 
 ## Deployed schema assumptions
 
