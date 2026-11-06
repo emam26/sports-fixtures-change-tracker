@@ -124,6 +124,7 @@ def test_repository_uses_deployed_competition_and_match_columns() -> None:
     assert "cs.source_league_id" in statements
     assert "m.source_match_is_finished" in statements
     assert "mr.result_type_kind" in statements
+    assert "ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END" in statements
     match_parameters = [
         parameters for statement, parameters in harness.calls if "OFFSET" in statement
     ]

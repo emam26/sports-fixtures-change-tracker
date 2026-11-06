@@ -195,7 +195,9 @@ class SQLServerRepository:
                    final_result.away_score,
                    m.source_last_update_utc AS last_source_update_utc
             {base}
-            ORDER BY m.kickoff_utc, m.match_id
+            ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                     m.kickoff_utc,
+                     m.match_id
             OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
             """,
             (*params, offset, limit),

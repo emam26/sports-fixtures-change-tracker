@@ -46,7 +46,7 @@ def _record(
     missing_team_id: bool = False,
     home_team_id: int = 10,
     away_team_id: int = 20,
-    kickoff_utc: str = "2026-10-20T19:00:00Z",
+    kickoff_utc: str | None = "2026-10-20T19:00:00Z",
     location: str | None = None,
     final_result_description: str = "Official-time result",
     home_team_icon_url: str | None = "https://example.test/home.png",
@@ -749,6 +749,25 @@ def test_unfinished_match_keeps_results_absent(tmp_path: Path) -> None:
     assert summary.status == "Succeeded"
     assert summary.results_seen == 0
     assert store.state["results"] == {}
+
+
+def test_unfinished_match_with_no_kickoff_is_retained_as_unscheduled(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    directory = _write_snapshot(
+        tmp_path,
+        [_record(finished=False, kickoff_utc=None)],
+    )
+
+    parsed = load_snapshot(directory, settings)
+    store = MemoryStore()
+    summary = SnapshotImportProcessor(store).import_snapshot(parsed)
+
+    assert parsed.matches[0].kickoff_utc is None
+    assert any(issue.code == "missing-kickoff-timestamp" for issue in parsed.issues)
+    assert summary.status == "Succeeded"
+    assert summary.results_seen == 0
+    assert store.state["matches"]
+    assert next(iter(store.state["matches"].values())).fields["kickoff_utc"] is None
 
 
 def test_invalid_record_is_recorded_and_does_not_load_fixture(tmp_path: Path) -> None:

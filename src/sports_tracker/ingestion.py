@@ -114,7 +114,7 @@ class FixtureData:
     source_group_id: int | None
     source_group_order_id: int | None
     source_group_name: str | None
-    kickoff_utc: datetime
+    kickoff_utc: datetime | None
     match_is_finished: bool
     source_last_update_raw: str | None
     source_time_zone_id: str | None
@@ -714,17 +714,28 @@ def _parse_fixture(
     away_team = _parse_team(record.get("team2"), "team2", issues, record_id)
     kickoff_raw = record.get("matchDateTimeUTC")
     kickoff_utc: datetime | None = None
-    try:
-        kickoff_utc = _utc_datetime(kickoff_raw, "matchDateTimeUTC")
-    except SnapshotValidationError as exc:
+    if kickoff_raw is None or (isinstance(kickoff_raw, str) and not kickoff_raw.strip()):
         _issue(
             issues,
-            "invalid-kickoff-timestamp",
-            str(exc),
+            "missing-kickoff-timestamp",
+            "matchDateTimeUTC is unavailable; fixture is retained with no scheduled kickoff",
             record_id,
             "matchDateTimeUTC",
             kickoff_raw,
+            severity="Warning",
         )
+    else:
+        try:
+            kickoff_utc = _utc_datetime(kickoff_raw, "matchDateTimeUTC")
+        except SnapshotValidationError as exc:
+            _issue(
+                issues,
+                "invalid-kickoff-timestamp",
+                str(exc),
+                record_id,
+                "matchDateTimeUTC",
+                kickoff_raw,
+            )
     match_is_finished = record.get("matchIsFinished")
     if not isinstance(match_is_finished, bool):
         _issue(
@@ -868,7 +879,6 @@ def _parse_fixture(
         or competition_name is None
         or home_team is None
         or away_team is None
-        or kickoff_utc is None
         or any(
             issue.severity == "Error" and issue.source_record_id == record_id for issue in issues
         )
