@@ -7,9 +7,10 @@ The project implements UEFA Champions League 2026/27 through OpenLigaDB:
 - shortcut: `ucl`
 - season: `2026`
 - expected league ID: `4946`
-- initial proof scope: Matchdays 3 and 4
-- planned expansion after evaluation: all 144 league-phase fixtures and later
-  knockout fixtures
+- configured league-phase expectation: Matchdays 1-8, 18 fixtures per matchday
+- verified imported coverage: Matchdays 3 and 4 only (36 fixtures)
+- pending source-backed coverage: Matchdays 1, 2, 5, 6, 7, and 8
+- later scope: provider-advertised knockout fixtures after explicit source review
 
 Competition identity remains configurable for future work, but no other competition
 is currently implemented or claimed.
@@ -25,7 +26,7 @@ is currently implemented or claimed.
 | 4 - offline replay/evaluation | dry-run and deterministic evaluation CLIs | Prior dry run verified; latest edits not run |
 | 5 - incremental synchronization | last-change decision, retries, lock, logs, partial failures | Initial/repeat manual sync verified; latest audit not run |
 | 6 - local FastAPI | status, discovery, fixtures, history, operations, notes | Owner verified read-only endpoint responses; latest audit not run |
-| 7 - browser dashboard | filters, detail, operations, optional notes | Browser visual audit remains pending after latest changes |
+| 7 - browser dashboard | three public sections, filters, detail, optional notes | Browser visual audit remains pending after latest changes |
 | 8 - one-shot scheduling support | WSL wrapper and Task Scheduler handoff | No task registered or activated |
 | 9 - test/evaluation framework | offline, mocked, repository, SQL-gated plans | 85 non-SQL passed / 1 deselected before latest audit |
 | 10 - portfolio documentation | architecture, API, testing, evaluation, runbook | Updated; owner review pending |
@@ -124,7 +125,7 @@ prominent API failure states, not evidence of a static-path repair.
 
 The dashboard was therefore completed rather than cosmetically patched:
 
-- a visible, responsive four-section shell is present before API data resolves;
+- a visible, responsive dashboard shell is present before API data resolves;
 - a new read-only dashboard-summary route supplies real fixture, finished/upcoming,
   goal-event, change, and latest committed-checkpoint metrics;
 - a paged cross-fixture change route supplies real before/after values and source
@@ -205,6 +206,7 @@ Files changed during the initial dashboard completion before this HTTP audit:
 - `docs/API.md`
 - `docs/ARCHITECTURE.md`
 - `docs/BUILD_PLAN.md`
+- `docs/COMMIT_PLAN.md`
 - `docs/DEPLOYMENT_LOCAL.md`
 - `docs/MANUAL_RUNBOOK.md`
 - `docs/TESTING.md`
@@ -227,9 +229,9 @@ Files additionally changed in the local dashboard HTTP audit follow-up:
 The current audit corrected the dashboard's field-change metric semantics, added an
 affected-fixture count, added non-positive path-ID validation, eliminated a known
 favicon request, and added latest-request-wins guards for overview, fixture,
-matchday, detail, change, and operational reads. Change-page bounds and null-kickoff
-ordering were also made deterministic. No test, Ruff check, API restart, browser
-check, SQL operation, sync, or Git action was run for these changes.
+matchday, detail, and change reads. Change-page bounds and null-kickoff ordering were
+also made deterministic. No test, Ruff check, API restart, browser check, SQL
+operation, sync, or Git action was run for these changes.
 
 Files changed for this audit:
 
@@ -245,6 +247,143 @@ Files changed for this audit:
 - `docs/BUILD_PLAN.md`
 - `docs/DEPLOYMENT_LOCAL.md`
 - `docs/TESTING.md`
+
+### 2026-11-06 public dashboard scope refinement (NOT RUN)
+
+The public dashboard now exposes only Overview, Match Explorer, and Change
+Intelligence. The Import & Sync Monitor navigation item, section, client-side API
+requests, event handler, and dedicated CSS were removed. Overview retains a compact
+**Last updated** indicator sourced exclusively from
+`latest_successful_sync_at_utc` in the existing dashboard-summary API response. It
+describes the latest successful synchronization recorded by the local database and
+does not claim a newer source observation or reveal snapshot/import-run identifiers.
+
+Import runs, synchronization checkpoints, validation issues, immutable snapshots,
+SQL tables, ingestion, synchronization, and loopback API endpoints remain unchanged.
+They are available to local development/diagnostic tooling but are intentionally not
+requested or displayed by the public browser page. The technical footer disclaimers
+and the earlier import-health headline copy remain removed from the frontend.
+
+Files changed for this refinement:
+
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `tests/test_api.py`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/BUILD_PLAN.md`
+- `docs/DEPLOYMENT_LOCAL.md`
+- `docs/MANUAL_RUNBOOK.md`
+- `docs/TESTING.md`
+
+No tests, static checks, API restart, browser verification, SQL operation, snapshot
+operation, Git command, commit, or push was run for this refinement. All new and
+changed checks are **NOT RUN** pending owner verification.
+
+### 2026-11-07 Change Intelligence presentation repair (NOT RUN)
+
+The frontend now preserves the API's field-level change records while grouping only
+related fixture, result, or goal fields that share a change kind, observation time,
+source snapshot, and import run. It maps recognized stored fields to human labels and
+derives constrained summaries such as `Match completed`, `Final score recorded`, and
+`Goal event added` only when their recorded differences support those statements.
+
+Inserted records now present recorded details without a fabricated `Not supplied →
+value` comparison. Updated records retain separately positioned previous/current
+values, and removed records retain their previous value. Event provenance remains
+explicit; snapshot observation and capture timestamps are never represented as goal
+occurrence times. Individual mapped field details are collapsed by default, and the
+match-detail history has a bounded vertical scroll area with responsive wrapping to
+prevent overlap or horizontal overflow.
+
+No API route, importer, SQL schema/table, raw snapshot, SQL Server data, credential,
+or local-only security control changed. The backend remains the system of record for
+all technically distinct rows and provenance.
+
+Files changed for this repair:
+
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `tests/test_api.py`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/BUILD_PLAN.md`
+- `docs/DEPLOYMENT_LOCAL.md`
+- `docs/MANUAL_RUNBOOK.md`
+- `docs/TESTING.md`
+
+The new frontend/API contract assertions and all manual visual checks are **NOT RUN**.
+No test, formatter, linter, API request, server, SQL command, browser session, Git
+command, commit, or push was executed for this repair.
+
+### 2026-11-07 UCL league-phase coverage implementation (NOT RUN)
+
+Owner-supplied database evidence remains limited to 36 completed UCL fixtures from
+Matchdays 3 and 4, with 936 legitimate field-level change records. Matchdays 1, 2, 5,
+6, 7, and 8 are not claimed captured or imported. Existing snapshots, checkpoints,
+imports, fixtures, and change records were not modified.
+
+The current database evidence supplied on 2026-11-06 reports that all 36 imported
+fixtures are finished. This does not rewrite the preserved Matchday 4 raw capture,
+which recorded 18 unfinished fixtures; source observations can update current rows
+while the original response remains immutable.
+
+The configuration now expresses the expected UCL league phase as Matchdays 1-8 with
+18 fixtures per matchday. The OpenLigaDB client can compare the documented
+`getavailablegroups` and full-season `getmatchdata` views. It retains disagreements
+as warnings, selects only explicit provider group-order IDs, and defaults sync to the
+configured league phase. Potential knockout groups remain excluded until an operator
+explicitly opts in after source-shape review.
+
+`report_season_coverage.py` is an offline raw-capture audit. It compares configured
+fixture expectations with unique provider match IDs in immutable local snapshots and
+labels a missing local snapshot as `not-captured`, not as provider unavailability or
+an importer failure. The manual SSMS aggregate separately establishes imported rows
+and import-run outcomes. No 144-fixture claim is made until both evidence paths agree.
+
+Unfinished fixtures retain `NULL` scores. A missing provider kickoff now becomes a
+validation warning while retaining the fixture with a `NULL` kickoff; malformed
+non-empty timestamps remain import-blocking errors. The API orders null kickoffs last.
+The public dashboard exposes All matches, Upcoming, and Completed filters, a
+chronological Overview upcoming-fixture list, and a `Kickoff to be confirmed` state
+without asserting a postponement or fabricating a date.
+
+Files changed for this coverage implementation:
+
+- `.env.example`
+- `README.md`
+- `src/sports_tracker/config.py`
+- `src/sports_tracker/openligadb.py`
+- `src/sports_tracker/ingestion.py`
+- `src/sports_tracker/season_coverage.py` (new)
+- `src/sports_tracker/api/repository.py`
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `scripts/discover_openligadb_season.py` (new)
+- `scripts/report_season_coverage.py` (new)
+- `scripts/sync_openligadb.py`
+- `tests/test_config.py`
+- `tests/test_openligadb.py`
+- `tests/test_ingestion.py`
+- `tests/test_season_coverage.py` (new)
+- `tests/test_sync_cli.py`
+- `tests/test_api.py`
+- `tests/test_api_repository.py`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/BUILD_PLAN.md`
+- `docs/EVALUATION.md`
+- `docs/MANUAL_RUNBOOK.md`
+- `docs/SOURCE_NOTES.md`
+- `docs/TESTING.md`
+
+All static checks, offline tests, provider discovery, raw capture, SQL queries,
+imports, synchronization, API/browser checks, and Git actions for this implementation
+are **NOT RUN**. The next manual step is the small static/offline test batch followed
+by the coverage report and source-discovery command in `docs/MANUAL_RUNBOOK.md`.
 
 ## Release-readiness implementation audit
 
@@ -281,9 +420,10 @@ Files changed for this audit:
   expanded import status, synchronization checkpoints, and non-secret service status.
 - Unexpected repository errors return generic HTTP 500 content and log only the
   exception type.
-- The dashboard discovers competition seasons/matchdays, filters current fixtures,
-  shows typed detail and changes, displays import/validation/checkpoint state, and
-  supports optional token-gated local note create/edit/archive.
+- The public dashboard discovers competition seasons/matchdays, filters current
+  fixtures, shows typed detail and changes, and supports optional token-gated local
+  note create/edit/archive. Import, validation, and checkpoint records remain in
+  loopback-only development/diagnostic endpoints rather than public dashboard UI.
 - Provider text uses `textContent`; the note token is not stored in browser storage.
 
 ### Security and release artifacts
@@ -348,34 +488,30 @@ are in `docs/MANUAL_RUNBOOK.md`.
 
 ## Current blocker and next manual step
 
-Verification of the synchronization CLI correction and completed dashboard is the
-current blocker. Where: WSL Bash. Working directory:
+Verification of the new season-discovery, coverage, nullable-kickoff, and dashboard
+changes is the current blocker. Where: WSL Bash. Working directory:
 `/mnt/f/sports-fixtures-change-tracker`.
 
 ```bash
 source .venv/bin/activate
-python scripts/run_api.py --host 127.0.0.1 --port 8000
-```
-
-In a second WSL Bash terminal in the same directory, verify the repaired aggregate
-route before browser work:
-
-```bash
-source .venv/bin/activate
-curl --fail --silent --show-error http://127.0.0.1:8000/api/dashboard-summary
-python -m pytest \
-  tests/test_sync_cli.py::test_sync_cli_returns_nonzero_after_partial_failure -q
-python -m pytest tests/test_api.py tests/test_api_repository.py -q
 ruff check .
 ruff format --check .
-python -m pytest -q -m "not sqlserver"
+python -m pytest \
+  tests/test_config.py \
+  tests/test_openligadb.py \
+  tests/test_season_coverage.py \
+  tests/test_ingestion.py \
+  tests/test_sync_cli.py \
+  tests/test_api.py \
+  tests/test_api_repository.py -q
+python scripts/report_season_coverage.py
 ```
 
-Expected: both focused test groups pass, both Ruff commands exit zero, and the
-complete selected offline suite has no failures. The `curl` route must return HTTP
-`200` JSON rather than the pre-edit `500`. Then follow the browser procedure in
-`docs/DEPLOYMENT_LOCAL.md`. Stop at the first failure and return the complete
-non-secret diagnostic. Do not run a live synchronization pass until this gate passes.
+Expected: both Ruff commands exit zero; the focused tests pass without network or SQL;
+and the coverage report documents the current local capture gap without changing data.
+Stop at the first failure and return the complete non-secret diagnostic. Only then run
+the provider discovery and one-time backfill steps in `docs/MANUAL_RUNBOOK.md`; do not
+run a live synchronization pass until those gates pass.
 
 ## Remaining limitations
 

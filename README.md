@@ -12,19 +12,27 @@ The implemented scope is UEFA Champions League 2026/27:
 - OpenLigaDB shortcut: `ucl`
 - season: `2026`
 - expected league ID: `4946`
-- initial coverage: Matchdays 3 and 4
-- later planned coverage: all 144 league-phase fixtures, followed by knockout fixtures
+- configured league phase: Matchdays 1-8 (18 fixtures each; 144 expected)
+- verified current database coverage: Matchdays 3 and 4 only (36 completed fixtures,
+  936 field-level change records)
+- pending source-backed backfill: Matchdays 1, 2, 5, 6, 7, and 8
+- later planned coverage: provider-advertised knockout-stage groups after explicit review
 
 The architecture keeps provider and competition identity configurable, but no other
 competition is currently claimed as implemented.
 
+The application does not claim that all 144 league-phase fixtures are imported. Use
+the offline coverage report and the database checks in the manual runbook after each
+capture/import batch. A missing local snapshot is a capture gap, not evidence that the
+provider lacks that matchday.
+
 Owner-supplied evidence confirms the project foundation, immutable raw capture, the
-deployed 12-table schema, and the first successful Matchday 3 SQL import. Import run
-`3` / source snapshot `8` inserted 18 completed matches, 36 typed results, and 74
-goals; four embedded team icons were safely omitted with warnings. The real exact
-replay, Matchday 4 SQL import, updated offline suite, API/browser flow, live one-shot
-sync, and scheduled operation remain awaiting manual verification after the latest
-edits.
+deployed 12-table schema, and a current database containing the 36 Matchday 3/4
+fixtures, all marked finished, with 936 field-level change records as of
+2026-11-06. The preserved Matchday 4 raw capture remains an earlier unfinished
+observation; later source observations may legitimately update those current rows.
+The latest offline suite, API/browser flow, live one-shot sync, and scheduled
+operation remain awaiting manual verification after the latest edits.
 
 ## Architecture
 
@@ -91,6 +99,22 @@ Import the same immutable snapshot only after the dry run succeeds:
 python scripts/import_snapshot.py --snapshot "<SNAPSHOT_DIRECTORY>"
 ```
 
+Audit immutable local source coverage without network or database access:
+
+```bash
+python scripts/report_season_coverage.py
+```
+
+Before any one-time backfill, inspect both documented provider discovery views. This
+makes HTTP requests but writes neither a raw snapshot nor the database:
+
+```bash
+python scripts/discover_openligadb_season.py
+```
+
+Capture only matchdays the discovery command reports, then validate and import each
+immutable snapshot separately as documented in `docs/MANUAL_RUNBOOK.md`.
+
 Run the local application only after database verification:
 
 ```bash
@@ -100,10 +124,13 @@ python scripts/run_api.py --host 127.0.0.1 --port 8000
 Open `http://127.0.0.1:8000/`. Note writes are disabled by default. If explicitly
 enabled locally, they also require a separate token and remain local-only.
 
-The one-shot synchronizer is intentionally not a daemon:
+The one-shot synchronizer is intentionally not a daemon. By default it discovers
+provider-advertised groups and limits itself to configured league-phase matchdays;
+knockout-stage groups require explicit configuration or CLI opt-in after source-shape
+review:
 
 ```bash
-python scripts/sync_openligadb.py --matchday 3 --matchday 4
+python scripts/sync_openligadb.py --discover
 ```
 
 This command makes real source requests and SQL writes. Run it only after offline,

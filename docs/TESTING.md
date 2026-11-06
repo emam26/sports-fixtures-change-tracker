@@ -18,8 +18,14 @@ covers:
 
 - source URL construction, identity contract, invalid JSON, HTTP/network failures,
   explicit timeouts, finite bounded retries, and mock transport behavior;
+- documented full-season/available-groups endpoint construction and source-backed
+  matchday discovery, including default exclusion of post-league-phase groups;
+- offline league-phase coverage counts for valid immutable captures, missing local
+  matchdays, invalid capture evidence, and provider fixture IDs reused across groups;
 - immutable byte capture, metadata, SHA-256, canonical directories, and no overwrite;
 - typed parsing of completed and unfinished source records;
+- unfinished fixtures with no provider kickoff retained with `NULL` kickoff and a
+  validation warning, never a fabricated schedule or score;
 - safe HTTP(S) team icons, embedded-data omission, oversized-value omission, and
   preservation of a previously stored safe icon;
 - initial import, exact replay, distinct same-content snapshots, controlled fixture,
@@ -36,10 +42,15 @@ covers:
   generic failure responses, note authorization/update/archive, status/matchday/
   checkpoint routes, dashboard summary event-versus-fixture counts, and paged
   cross-fixture change provenance;
-- dashboard HTML/static asset serving, summary/change response contracts, and
-  change-feed pagination controls, stale-response guards, deterministic null-kickoff
-  ordering, and favicon declaration, alongside the browser-only loading, empty,
-  failure, keyboard, and narrow-layout checks in the manual runbook;
+- dashboard HTML/static asset serving, three-section public navigation, summary/change
+  response contracts, accurate Last updated rendering, and absence of operations API
+  requests/containers; field-level change provenance, human-readable grouped change
+  summaries, absence of raw field-name rendering, change-feed pagination controls,
+  stale-response guards, deterministic null-kickoff ordering, and favicon
+  declaration; alongside the browser-only loading, empty, failure, keyboard, and
+  narrow-layout checks in the manual runbook;
+- All matches/Upcoming/Completed filter contracts, nullable-score upcoming responses,
+  deterministic null-kickoff ordering, and Overview's chronological upcoming list;
 - repository SQL mapping against the actual deployed table/column names, dashboard
   aggregate/change queries, and note transaction behavior;
 - CLI configuration propagation for offline snapshot evaluation.
@@ -87,10 +98,16 @@ offline suite and read-only schema check pass, manually verify:
 - import runs and checkpoints reference the expected snapshot/run IDs;
 - `/health`, `/api/competitions`, `/api/matchdays`, `/api/dashboard-summary`,
   `/api/matches`, match detail, `/api/match-changes`, `/api/sync-checkpoints`, import
-  runs, and validation issues return successfully;
+  runs, and validation issues return successfully through their loopback APIs; the
+  latter three remain development/diagnostic routes and must not appear in the public
+  dashboard navigation or browser request list;
 - the browser handles loading, empty, error, nullable score, narrow-screen, and
   keyboard-focus states, including change-feed Previous/Next controls when more than
-  one page of observed changes exists;
+  one page of observed changes exists, and presents only Overview, Match Explorer,
+  Change Intelligence, plus the timestamp-only Last updated indicator;
+- match-detail change history groups related result/goal fields from one observation,
+  keeps long histories vertically scrollable, labels inserted/updated/removed events,
+  and never presents a snapshot observation timestamp as a goal time;
 - note writes return 403 by default and work only with an enabled local token.
 
 Follow [MANUAL_RUNBOOK.md](MANUAL_RUNBOOK.md) for the ordered commands and SQL.

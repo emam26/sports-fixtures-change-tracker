@@ -16,6 +16,25 @@ as prior source evidence.
 
 These values are acceptance inputs, not performance or idempotency results.
 
+## League-phase coverage
+
+The configured UCL league-phase target is eight matchdays with 18 fixtures each (144
+expected fixtures). Run `scripts/report_season_coverage.py` before and after each
+backfill batch. It counts distinct provider match IDs from immutable local source
+captures only; `not-captured` is a local evidence gap, not proof that the provider has
+no fixture or that the importer failed. Pair it with the manual SQL per-matchday
+aggregate and import-run status query in `MANUAL_RUNBOOK.md`.
+
+```text
+capture coverage = distinct valid raw provider match IDs / 144
+import coverage  = distinct imported provider match IDs / 144
+```
+
+Report missing source-advertised groups, invalid captures, failed imports, duplicate
+provider IDs, and unscheduled (`NULL` kickoff) fixtures separately. Do not collapse
+these failure modes into one percentage or claim full coverage before both measures
+are verified.
+
 ## Parsing correctness
 
 Replay each immutable snapshot with `scripts/evaluate_snapshot.py` and the import

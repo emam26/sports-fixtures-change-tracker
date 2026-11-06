@@ -3,11 +3,12 @@
 ## Scope and verification boundary
 
 The implemented scope is UEFA Champions League 2026/27 (`ucl`, season `2026`,
-expected league ID `4946`), beginning with Matchdays 3 and 4. Provider, competition,
-season, and matchday identity are configuration inputs for future reuse, but UCL is
-the only competition currently implemented and documented. Planned expansion to all
-144 league-phase fixtures and later knockout fixtures is gated on the initial
-evaluation.
+expected league ID `4946`). The configured league-phase expectation is Matchdays 1-8
+with 18 fixtures per matchday (144 total), while the owner has verified database
+coverage only for Matchdays 3 and 4 (36 fixtures) as of 2026-11-06. Provider,
+competition, season, expected matchdays, and expected fixtures-per-matchday are
+configuration inputs. UCL is the only competition currently implemented and
+documented; knockout groups remain opt-in after source-shape review.
 
 The owner has verified the project foundation, two real raw matchday shapes, the
 deployed 12-table schema, and the first Matchday 3 SQL import. The latest audit
@@ -35,11 +36,24 @@ observed changes, checkpoints, and separately owned local notes.
 
 The reusable client builds encoded URLs from validated configuration, sends a
 descriptive user agent, uses an explicit timeout, and applies bounded transient
-retries. The full-data endpoint is:
+retries. The matchday endpoint is:
 
 ```text
 /getmatchdata/ucl/2026/{matchday}
 ```
+
+Season discovery additionally compares both documented provider views:
+
+```text
+/getavailablegroups/ucl/2026
+/getmatchdata/ucl/2026
+```
+
+Discovery treats neither endpoint as complete truth by itself. It reports groups
+advertised only by one endpoint, builds a union of explicit positive group-order IDs,
+and by default limits synchronization to configured league-phase matchdays.
+Additional groups, including potential knockout rounds, require explicit opt-in; the
+system does not infer a fixture or result for an absent group.
 
 The basic source contract requires a top-level list and, for every item, `matchID`,
 `leagueShortcut=ucl`, `leagueSeason=2026`, and `leagueId=4946`.
@@ -52,6 +66,8 @@ data/raw/ucl/2026/matchday-{n}/{UTC timestamp}_{full SHA-256}/
 
 An existing directory is never overwritten. Identical content captured at different
 times can intentionally produce distinct provenance directories with the same hash.
+Season discovery responses are used only to select matchdays; every importable
+backfill record still comes from a separately captured immutable matchday response.
 
 ## Observed OpenLigaDB mapping
 
@@ -71,7 +87,13 @@ The observed `lastUpdateDateTime` lacks an offset. It is preserved as raw text a
 not guessed into UTC. A timezone-aware `matchDateTimeUTC` is authoritative for
 kickoff. Future fixtures with an empty result list keep absent/`NULL` scores; zero is
 never a missing-value substitute. `HalfTime` and `After90Minutes` are stored and
-interpreted separately.
+interpreted separately. The schema permits a `NULL` kickoff. When an unfinished
+provider fixture has no `matchDateTimeUTC`, parsing retains the fixture with a warning
+and `NULL` kickoff rather than inventing a date; malformed non-empty timestamps remain
+errors. A later source-backed kickoff update is persisted as a normal field-level
+change. The importer does not infer a separate postponed or rescheduled status from
+missing data; it preserves the provider's current finish flag, kickoff value, and
+field-level transition instead.
 
 `dbo.teams.team_icon_url` is nullable `nvarchar(2048)` URL metadata, not image
 storage. Only trimmed absolute HTTP(S) URLs within that limit are retained. Embedded
@@ -119,7 +141,9 @@ and a deliberate policy before implementation.
 ## Incremental synchronization
 
 The synchronizer performs one bounded pass and is not a daemon. An atomic file lock
-prevents overlapping local runs. It skips a full matchday fetch only when a reliable,
+prevents overlapping local runs. It can discover provider-advertised matchdays before
+the pass, limits default selection to the configured league phase, and keeps
+post-league-phase groups opt-in. It skips a full matchday fetch only when a reliable,
 timezone-aware last-change signal is not newer than the committed SQL checkpoint.
 Unsupported, empty, malformed, failed, or timezone-ambiguous signals conservatively
 force a full fetch.
@@ -153,13 +177,31 @@ or written to logs. This is a single-machine safety gate, not internet-grade
 authentication. Notes are application-owned and cannot update source fixtures,
 results, goals, changes, snapshots, or checkpoints.
 
-The framework-free dashboard has four API-backed sections: overview metrics,
-match explorer, change intelligence, and import/synchronization monitoring. It
-discovers loaded competition seasons and matchdays, filters and locally orders
-fixtures by kickoff, distinguishes missing scores, presents explicit result/goal
-types and snapshot provenance, and optionally manages local notes. Every section
-starts with a visible loading shell and renders an explicit empty or safe failure
-state. Source text is assigned with `textContent`, not HTML injection.
+The framework-free public dashboard has three API-backed sections: Overview, Match
+Explorer, and Change Intelligence. Overview presents a small **Last updated** value
+from `latest_successful_sync_at_utc`; it is the timestamp of the latest successful
+synchronization recorded by the database, not evidence of a more recent source poll.
+It also presents a compact Upcoming fixtures list sourced from unfinished local
+records and ordered by reliable UTC kickoff, with records lacking a kickoff placed
+last and labelled as to be confirmed. The dashboard discovers loaded competition
+seasons and matchdays, filters All matches, Upcoming, and Completed fixture views,
+orders nullable kickoffs deterministically, distinguishes missing scores, presents
+explicit result/goal types and snapshot provenance, and optionally manages local notes. Every
+section starts with a visible loading shell and renders an explicit empty or safe
+failure state. Source text is assigned with `textContent`, not HTML injection.
+
+Change Intelligence is a presentation layer over immutable field-level
+`match_changes` rows. It groups fields only when they identify the same fixture,
+result, or goal record within one observation/import provenance tuple. Recognized
+fields receive human labels and constrained summaries such as `Match completed`,
+`Final score recorded`, or `Goal event added`; the UI uses those summaries only when
+the stored differences support them. Individual field details remain available in an
+expandable, responsive disclosure. Snapshot observation/capture times remain labeled
+as provenance and are never displayed as a goal occurrence time.
+
+Import runs, validation issues, and synchronization checkpoints remain available only
+through loopback API routes and local development/diagnostic tooling. The public
+browser dashboard neither requests nor renders those operational records.
 
 ## Deployed schema assumptions
 
@@ -188,5 +230,8 @@ manual workflow; the application does not self-migrate the deployed database.
 - Automatic provider-side rate-limit discovery is absent; retries are bounded and
   scheduling frequency remains an operator responsibility. The documented 60 RPM
   limit is a ceiling, not a polling target.
+- Current full league-phase provider availability has not been verified in this
+  working tree. The discovery and coverage code is **NOT RUN** until the owner
+  performs the documented manual checks.
 - There is no public deployment, external authentication, worker queue, or
   multi-competition user experience.

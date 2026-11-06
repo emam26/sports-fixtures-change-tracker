@@ -12,8 +12,10 @@ If the working tree still supports clean separation, review these groups:
 2. **Align and complete the local API** - deployed-schema query fixes, nullable
    models, status/matchday/checkpoint routes, generic errors, note transactions, and
    repository/API tests.
-3. **Complete the dashboard** - dynamic filters, fixture detail, operations status,
-   optional local notes, accessibility, and responsive states.
+3. **Complete the dashboard** - the three public sections, dynamic filters, fixture
+   detail, accurate Last updated evidence, optional local notes, accessibility, and
+   responsive states. Keep import/synchronization operations in local diagnostic
+   tooling rather than the public browser UI.
 4. **Finalize security and documentation** - ignore rules, architecture, runbook,
    testing/evaluation, local scheduling, and evidence updates.
 

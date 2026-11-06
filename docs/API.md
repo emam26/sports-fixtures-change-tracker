@@ -48,6 +48,12 @@ parameterized `LIKE` query. Scores in match, result, and goal responses are null
 because the source can genuinely omit them. The detail response never substitutes a
 half-time value for `After90Minutes`.
 
+Use `finished=false` for Upcoming records, `finished=true` for Completed records, or
+omit the parameter for All matches. Results are ordered by provider kickoff with
+`NULL` kickoffs last, then match identity. A missing kickoff is preserved as `null`;
+clients must present it as unscheduled/to be confirmed rather than inventing a date or
+labelling it postponed without provider evidence.
+
 `kickoff_utc`, result timestamps, checkpoint timestamps, and observation timestamps
 are UTC API fields. The dashboard renders those values in the browser's local timezone.
 `source_time_zone_id` is provider metadata, not an offset to infer missing timestamps:
@@ -61,18 +67,37 @@ snapshot retrieval time. It exposes only changes recorded by the importer; an em
 page means no observed field-level changes for the selection, not that a source was
 never checked.
 
-Operational list routes currently return bounded arrays rather than page envelopes.
-Callers select `limit` and `offset`; the dashboard uses the latest 20 rows.
+The match-detail change route remains field-level for traceability. The browser groups
+fields from the same fixture/result/goal record only when they share the same recorded
+change kind, snapshot, import run, and observation time. It derives human-readable
+summaries solely from those stored fields, keeps the individual mapped details behind
+an expandable disclosure, and never treats the observation or capture timestamp as a
+goal occurrence time. This presentation layer does not change the API response,
+importer history, or SQL records.
+
+Operational list routes return bounded arrays rather than page envelopes. Development
+and debugging callers select `limit` and `offset`; the public dashboard does not
+request or render import runs, validation issues, or synchronization checkpoints.
+They remain loopback-only APIs for local diagnostics and the operational CLI.
 
 ## Dashboard assets and resilience
 
 `GET /` serves the framework-free dashboard. `/assets/app.js` and
 `/assets/styles.css` are mounted from the packaged `sports_tracker.web` directory.
-The page has visible loading shells and safe error panels for each API-backed
-section. The cross-fixture change feed uses the API's `limit` and `offset` contract
-for accessible Previous/Next pagination. All provider text is inserted with
-`textContent`; browser assets do not contain SQL credentials, `.env` values, or note
-tokens.
+The public page has three sections: Overview, Match Explorer, and Change Intelligence.
+Overview formats `latest_successful_sync_at_utc` as “Last updated”; this is the latest
+successful synchronization timestamp recorded by the database, not a claim that the
+source was polled more recently. The page has visible loading shells and safe error
+panels for each public API-backed section. The cross-fixture change feed uses the
+API's `limit` and `offset` contract for accessible Previous/Next pagination. All
+provider text is inserted with `textContent`; browser assets do not contain SQL
+credentials, `.env` values, or note tokens.
+
+Overview also requests a small `finished=false` fixture page to show upcoming local
+records in chronological UTC order. This is a presentation of imported database state,
+not a claim that every scheduled provider fixture has already been captured. A missing
+kickoff remains `null` and is shown as needing confirmation; the API does not invent
+postponed or rescheduled status values.
 
 ## Errors and security
 

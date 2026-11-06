@@ -88,6 +88,140 @@ Expected Matchday 4: 18 matches, zero results, zero goals, SHA-256
 
 Stop if a hash, identity, or count differs.
 
+## 4A. Season discovery and one-time league-phase backfill
+
+The current verified database has Matchdays 3 and 4 only. This procedure preserves
+those rows, their field-level change history, immutable snapshots, and synchronization
+checkpoints. It never resets or deletes the dedicated development database.
+
+Where: WSL Bash, project directory.
+
+First audit local raw-capture coverage. This is offline and opens neither SQL Server
+nor OpenLigaDB:
+
+```bash
+python scripts/report_season_coverage.py
+```
+
+Expected with the reported current state: the command prints exit status `1` because
+the report is intentionally incomplete. Matchdays 3 and 4 have 18 captured fixture
+IDs each, while Matchdays 1, 2, 5, 6, 7, and 8 are `not-captured`. `not-captured`
+means only that no local immutable snapshot is present; it is not evidence that the
+provider lacks those fixtures. Return this non-secret report before continuing.
+
+Where: WSL Bash, project directory. This command makes two bounded read-only provider
+requests, writes no raw snapshot, and performs no database import:
+
+```bash
+python scripts/discover_openligadb_season.py
+```
+
+Expected: it prints the available-groups and full-season URLs, the matchdays each
+source view reports, their union, and any disagreement. Stop and return that output if
+either endpoint is unavailable, returns no league-phase matchdays, or the views
+disagree. Do not treat a full-season response as an importable snapshot.
+
+For each of Matchdays 1, 2, 5, 6, 7, and 8 that discovery explicitly reports as a
+league-phase matchday, run this small batch one matchday at a time. Replace only the
+matchday number; do not capture Matchdays 3 or 4 again during this backfill:
+
+```bash
+python scripts/fetch_openligadb.py --matchday 1
+```
+
+Expected: one immutable snapshot location, a SHA-256, and the source match count. If
+the provider returns an error, empty/invalid contract, or a count other than the
+expected 18, stop. Preserve the output and mark the matchday as a source-data gap; do
+not fabricate fixtures or retry aggressively. Respect the documented 60 requests per
+minute limit.
+
+For each successfully captured directory, run offline validation before the SQL write:
+
+```bash
+export BACKFILL_SNAPSHOT='<Snapshot location printed by fetch_openligadb.py>'
+python scripts/evaluate_snapshot.py "$BACKFILL_SNAPSHOT"
+python scripts/import_snapshot.py --snapshot "$BACKFILL_SNAPSHOT" --dry-run
+python scripts/import_snapshot.py --snapshot "$BACKFILL_SNAPSHOT"
+```
+
+Expected: the first two commands have no network or database side effect; the dry run
+reports the provider match/result/goal counts without fabricated scores. The final
+command reports one successful import. Stop if it reports validation errors, a failed
+transaction, or a count that conflicts with the capture output. Do not proceed to the
+next matchday until the SQL check below succeeds.
+
+Where: SSMS or another confirmed SQL Server client. Target database:
+`SportsFixturesTracker` only.
+
+```sql
+USE [SportsFixturesTracker];
+GO
+
+IF DB_NAME() <> N'SportsFixturesTracker'
+    THROW 50000, 'Wrong database selected; stop without changes.', 1;
+
+SELECT m.matchday_number,
+       COUNT(*) AS fixtures,
+       COUNT(DISTINCT m.provider_match_id) AS unique_provider_fixture_ids,
+       SUM(CASE WHEN m.source_match_is_finished = 1 THEN 1 ELSE 0 END) AS completed,
+       SUM(CASE WHEN m.source_match_is_finished = 0 THEN 1 ELSE 0 END) AS upcoming,
+       SUM(CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END) AS kickoff_not_recorded
+FROM dbo.matches AS m
+INNER JOIN dbo.competition_seasons AS cs
+    ON cs.competition_season_id = m.competition_season_id
+INNER JOIN dbo.competitions AS c
+    ON c.competition_id = cs.competition_id
+WHERE c.provider = N'OpenLigaDB'
+  AND c.provider_shortcut = N'ucl'
+  AND cs.season_start_year = 2026
+GROUP BY m.matchday_number
+ORDER BY m.matchday_number;
+
+SELECT ir.matchday_number,
+       ir.status,
+       COUNT(*) AS import_runs,
+       MAX(ir.completed_at_utc) AS latest_completion_utc
+FROM dbo.import_runs AS ir
+INNER JOIN dbo.competition_seasons AS cs
+    ON cs.competition_season_id = ir.competition_season_id
+INNER JOIN dbo.competitions AS c
+    ON c.competition_id = cs.competition_id
+WHERE ir.provider = N'OpenLigaDB'
+  AND c.provider_shortcut = N'ucl'
+  AND cs.season_start_year = 2026
+GROUP BY ir.matchday_number, ir.status
+ORDER BY ir.matchday_number, ir.status;
+
+SELECT m.provider_match_id, COUNT(*) AS duplicate_count
+FROM dbo.matches AS m
+INNER JOIN dbo.competition_seasons AS cs
+    ON cs.competition_season_id = m.competition_season_id
+INNER JOIN dbo.competitions AS c
+    ON c.competition_id = cs.competition_id
+WHERE m.provider = N'OpenLigaDB'
+  AND c.provider_shortcut = N'ucl'
+  AND cs.season_start_year = 2026
+GROUP BY m.provider_match_id
+HAVING COUNT(*) > 1;
+```
+
+Expected: each successfully imported matchday has unique provider IDs, no duplicate
+query rows, and an appropriate import-run status. A raw capture without a successful
+import run is an importer/workflow issue; a discovery omission or failed source capture
+is a source-data availability issue. Return these non-secret aggregates after each
+batch. Do not proceed if a duplicate appears or a prior Matchday 3/4 count decreases.
+
+Only after every individually captured matchday is reviewed, rerun:
+
+```bash
+python scripts/report_season_coverage.py
+```
+
+Do not claim 144 fixtures until this report shows `captured-complete` for all eight
+configured league-phase matchdays and the SQL query shows 144 distinct provider
+fixture IDs. Knockout-stage groups are outside this one-time backfill and require a
+separate source-shape review plus explicit opt-in.
+
 ## 5. Database connectivity and read-only integration test
 
 Where: WSL Bash, same directory.  
@@ -266,10 +400,14 @@ SELECT (SELECT COUNT(*) FROM dbo.matches
        (SELECT COUNT(*) FROM dbo.match_changes) AS change_rows;
 ```
 
-Expected final domain state: 36 matches / 36 unique provider match IDs, 18 finished,
-18 unfinished, 36 result rows, and 74 goal rows. Matchday 4 has no result or goal
-rows. Matchday 3 retains explicit `HalfTime` and `After90Minutes` rows. Baseline and
-unchanged replay should leave business change count at its pre-run value.
+Expected state for the historical Matchday 3/4 proof only: 36 matches / 36 unique
+provider match IDs, 18 finished, 18 unfinished, 36 result rows, and 74 goal rows.
+The preserved Matchday 4 capture has no result or goal rows, while Matchday 3 retains
+explicit `HalfTime` and `After90Minutes` rows. The owner’s later current-database
+evidence reports all 36 fixtures finished after subsequent source observations; do
+not confuse that current state with the immutable historical capture. The league-
+phase backfill changes totals only through separately preserved, validated snapshots;
+do not reuse this 36-fixture baseline as a full-season expectation.
 
 ## 9. Inspect operations
 
@@ -280,8 +418,9 @@ python scripts/inspect_operations.py --limit 20
 ```
 
 Purpose: display non-secret import/checkpoint diagnostics. Expected: the verified
-run `3`, a successful exact replay, a successful Matchday 4 run, and checkpoints for
-Matchdays 3 and 4. Return IDs, statuses, counts, and timestamps only.
+historical runs/checkpoints remain present, and each later backfill matchday has its
+own successful run/checkpoint only after import succeeds. Return IDs, statuses,
+counts, and timestamps only.
 
 ## 10. API and dashboard
 
@@ -299,28 +438,38 @@ Base address: `http://127.0.0.1:8000`
 1. Open `/health`; expect `status=ok`, `database=available`.
 2. Open `/docs`; inspect the documented status, competition, matchday, fixture,
    checkpoint, import, validation, and note endpoints.
-3. Open `/` with a hard reload. Confirm the overview, match explorer, change
-   intelligence, and import/sync monitor show visible loading or data states; they
-   must not collapse into an unexplained blank content area.
+3. Open `/` with a hard reload. Confirm the public navigation contains only Overview,
+   Match Explorer, and Change Intelligence. Each section must show a visible loading
+   or data state rather than collapsing into an unexplained blank content area. There
+   must be no Import & Sync Monitor link or visible operations cards.
 4. In browser developer tools, confirm `/assets/styles.css` and `/assets/app.js`
-   return `200`; return the non-secret console/network diagnostic if either fails.
+   return `200`. The public page must not request `/api/import-runs`,
+   `/api/sync-checkpoints`, or `/api/validation-issues`; those remain local diagnostic
+   APIs. Return the non-secret console/network diagnostic if an asset fails or an
+   operational request is made.
 5. Confirm the competition selector and matchdays are discovered from the database.
-   Select the available season and confirm overview values refresh.
+   Select the available season and confirm overview values refresh. Verify that **Last
+   updated** matches the latest successful synchronization timestamp returned by
+   `/api/dashboard-summary`, or reads `Not recorded` when no such timestamp exists.
+   It must not display snapshot/import-run IDs or imply a newer source observation.
 6. Filter by matchday, status, team, and kickoff order; clear filters and confirm
    recovery. An unmatched team search must show a useful empty state.
 7. Open completed and unfinished fixture details. Confirm future score reads "Not
    supplied", while completed results retain explicit types and goal events.
-8. Inspect global and per-fixture changes. Confirm before/after values, observation
-   time, and source snapshot identity appear only for recorded business changes.
-9. Inspect import runs, validation issues, and synchronization checkpoints. A source
-   snapshot is not a successful import until its run/checkpoint evidence says so.
-10. Use keyboard-only navigation and a narrow browser width; confirm focus and dialog
-    controls remain usable. After the page initially loads, simulate offline mode in
-    browser developer tools and use a dashboard refresh button; expect a visible safe
-    API error panel rather than silent disappearance.
-11. With default configuration, confirm note-write controls explain that writes are
-    disabled and note writes return 403 in `/docs`.
-12. Stop Uvicorn with Ctrl+C.
+8. Inspect global and per-fixture changes. Confirm related result/goal fields from one
+   observation are grouped into readable events with Inserted, Updated, or Removed
+   badges; use the disclosure to inspect mapped field details. Technical field names
+   must not be primary labels, inserted records must not read as `Not supplied →
+   value`, and long detail histories must scroll vertically without overlapping text.
+   Confirm observation/capture times are clearly provenance, not a goal occurrence
+   time, and that source snapshot identity appears only for recorded business changes.
+9. Use keyboard-only navigation and a narrow browser width; confirm focus and dialog
+   controls remain usable. After the page initially loads, simulate offline mode in
+   browser developer tools and use a dashboard refresh button; expect a visible safe
+   API error panel rather than silent disappearance.
+10. With default configuration, confirm note-write controls explain that writes are
+   disabled and note writes return 403 in `/docs`.
+11. Stop Uvicorn with Ctrl+C.
 
 If local note writes are deliberately enabled in `.env`, use a new local token of at
 least 16 characters, restart the API, and test create/edit/archive through the
@@ -335,7 +484,7 @@ Create screenshots only after the corresponding check has passed. Suggested evid
 - fixture board filtered to completed Matchday 3;
 - fixture board filtered to unfinished Matchday 4 with "Not supplied" scores;
 - one completed fixture detail showing explicit result types and goals;
-- Operations view showing successful import runs and both checkpoints;
+- overview showing the accurate Last updated indicator for the loaded selection;
 - terminal summaries for Ruff, offline pytest, and non-secret SQL count checks;
 - one narrow viewport demonstrating the responsive layout and visible focus state.
 
@@ -352,7 +501,7 @@ writes. OpenLigaDB's documented limit is 60 requests per minute.
 Where: WSL Bash, project directory.
 
 ```bash
-python scripts/sync_openligadb.py --matchday 3 --matchday 4
+python scripts/sync_openligadb.py --discover
 ```
 
 Expected: each matchday is imported or reliably skipped once. A failed last-change
@@ -374,7 +523,7 @@ if a log contains any secret or if a checkpoint advances without a successful im
 Where: WSL Bash, project directory.
 
 ```bash
-bash scripts/run_scheduled_sync.sh --matchday 3 --matchday 4
+bash scripts/run_scheduled_sync.sh --discover
 ```
 
 Expected: the same one-shot behavior and exit codes documented in
