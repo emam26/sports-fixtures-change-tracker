@@ -21,6 +21,8 @@ class FakeRepository:
             "updated_at_utc": datetime(2026, 11, 3, tzinfo=UTC),
         }
         self.last_filters: dict[str, Any] = {}
+        self.last_summary_competition_id: int | None = None
+        self.last_change_filters: dict[str, int | None] = {}
 
     def health(self) -> None:
         return None
@@ -54,6 +56,20 @@ class FakeRepository:
     def matches(self, **filters: Any) -> tuple[list[dict[str, Any]], int]:
         self.last_filters = filters
         return [self._match()], 1
+
+    def dashboard_summary(self, competition_season_id: int | None) -> dict[str, Any]:
+        self.last_summary_competition_id = competition_season_id
+        return {
+            "total_fixtures": 18,
+            "finished_fixtures": 18,
+            "upcoming_fixtures": 0,
+            "goals_recorded": 74,
+            "detected_changes": 1,
+            "changed_fixtures": 1,
+            "latest_successful_sync_at_utc": datetime(2026, 11, 3, tzinfo=UTC),
+            "latest_successful_snapshot_id": 8,
+            "latest_successful_import_run_id": 3,
+        }
 
     def _match(self) -> dict[str, Any]:
         return {
@@ -89,6 +105,39 @@ class FakeRepository:
 
     def changes(self, match_id: int) -> list[dict[str, Any]]:
         return []
+
+    def match_changes(
+        self,
+        *,
+        competition_season_id: int | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        self.last_change_filters = {
+            "competition_season_id": competition_season_id,
+            "limit": limit,
+            "offset": offset,
+        }
+        return [
+            {
+                "match_change_id": 5,
+                "match_id": 10,
+                "provider_match_id": 123,
+                "matchday_number": 3,
+                "home_team": "Alpha FC",
+                "away_team": "Beta FC",
+                "field_name": "match_is_finished",
+                "change_kind": "updated",
+                "old_value": "false",
+                "new_value": "true",
+                "observed_at_utc": datetime(2026, 11, 3, tzinfo=UTC),
+                "source_last_update_utc": datetime(2026, 11, 3, tzinfo=UTC),
+                "import_run_id": 3,
+                "source_snapshot_id": 8,
+                "snapshot_sha256": "a" * 64,
+                "snapshot_retrieved_at_utc": datetime(2026, 11, 3, tzinfo=UTC),
+            }
+        ], 1
 
     def sync_checkpoints(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
         return [
@@ -176,6 +225,101 @@ def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
     assert checkpoints_response.json()[0]["last_successful_import_run_id"] == 3
 
 
+def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
+    repository = FakeRepository()
+    client = TestClient(create_app(repository, _settings()))
+
+    dashboard_response = client.get("/")
+    script_response = client.get("/assets/app.js")
+    stylesheet_response = client.get("/assets/styles.css")
+    summary_response = client.get("/api/dashboard-summary?competition_season_id=1")
+    changes_response = client.get("/api/match-changes?competition_season_id=1&limit=20")
+
+    assert dashboard_response.status_code == 200
+    assert "Match explorer" in dashboard_response.text
+    assert "Change intelligence" in dashboard_response.text
+    assert 'rel="icon"' in dashboard_response.text
+    assert 'id="fixture-sort"' in dashboard_response.text
+    assert script_response.status_code == 200
+    assert "javascript" in script_response.headers["content-type"]
+    assert "/api/dashboard-summary" in script_response.text
+    assert "/api/match-changes" in script_response.text
+    assert "function sortFixtures" in script_response.text
+    assert "No fixtures match these filters" in script_response.text
+    assert 'id="change-page-previous"' in dashboard_response.text
+    assert 'id="change-page-next"' in dashboard_response.text
+    assert "function renderChangePagination" in script_response.text
+    assert "changePageSize: 25" in script_response.text
+    assert "state.changeOffset >= page.total" in script_response.text
+    assert "if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;" in script_response.text
+    assert "renderFixturePage(state.fixturePage)" in script_response.text
+    assert "changeRequestId" in script_response.text
+    assert "matchdayRequestId" in script_response.text
+    assert "overviewRequestId" in script_response.text
+    assert stylesheet_response.status_code == 200
+    assert "text/css" in stylesheet_response.headers["content-type"]
+    assert ".metric-grid" in stylesheet_response.text
+    assert ".pagination" in stylesheet_response.text
+    assert summary_response.json()["goals_recorded"] == 74
+    assert summary_response.json()["detected_changes"] == 1
+    assert summary_response.json()["changed_fixtures"] == 1
+    assert summary_response.json()["latest_successful_import_run_id"] == 3
+    assert repository.last_summary_competition_id == 1
+    change_page = changes_response.json()
+    assert change_page["total"] == 1
+    assert change_page["items"][0]["snapshot_sha256"] == "a" * 64
+    assert repository.last_change_filters == {
+        "competition_season_id": 1,
+        "limit": 20,
+        "offset": 0,
+    }
+
+
+def test_dashboard_data_routes_preserve_empty_state_contracts() -> None:
+    repository = FakeRepository()
+
+    def empty_matches(**filters: Any) -> tuple[list[dict[str, Any]], int]:
+        del filters
+        return [], 0
+
+    def empty_summary(competition_season_id: int | None) -> dict[str, Any]:
+        del competition_season_id
+        return {
+            "total_fixtures": 0,
+            "finished_fixtures": 0,
+            "upcoming_fixtures": 0,
+            "goals_recorded": 0,
+            "detected_changes": 0,
+            "changed_fixtures": 0,
+            "latest_successful_sync_at_utc": None,
+            "latest_successful_snapshot_id": None,
+            "latest_successful_import_run_id": None,
+        }
+
+    def empty_changes(**filters: Any) -> tuple[list[dict[str, Any]], int]:
+        del filters
+        return [], 0
+
+    repository.matches = empty_matches  # type: ignore[method-assign]
+    repository.dashboard_summary = empty_summary  # type: ignore[method-assign]
+    repository.match_changes = empty_changes  # type: ignore[method-assign]
+    client = TestClient(create_app(repository, _settings()))
+
+    assert client.get("/api/matches").json() == {
+        "items": [],
+        "total": 0,
+        "limit": 50,
+        "offset": 0,
+    }
+    assert client.get("/api/dashboard-summary").json()["total_fixtures"] == 0
+    assert client.get("/api/match-changes").json() == {
+        "items": [],
+        "total": 0,
+        "limit": 50,
+        "offset": 0,
+    }
+
+
 def test_match_detail_preserves_typed_results() -> None:
     client = TestClient(create_app(FakeRepository(), _settings()))
 
@@ -221,6 +365,19 @@ def test_missing_match_is_404() -> None:
     response = client.get("/api/matches/999")
 
     assert response.status_code == 404
+
+
+def test_non_positive_path_ids_are_rejected_before_repository_access() -> None:
+    client = TestClient(create_app(FakeRepository(), _settings()))
+
+    responses = [
+        client.get("/api/matches/0"),
+        client.get("/api/matches/-1/changes"),
+        client.get("/api/matches/0/notes"),
+    ]
+
+    assert all(response.status_code == 422 for response in responses)
+    assert all("not-a-real-secret" not in response.text for response in responses)
 
 
 def test_note_writes_are_disabled_by_default() -> None:

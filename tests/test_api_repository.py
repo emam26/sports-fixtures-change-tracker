@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
+
+import pytest
 
 from sports_tracker.api.repository import SQLServerRepository
 
@@ -231,6 +233,145 @@ def test_repository_matchdays_and_checkpoints_use_deployed_schema() -> None:
     statements = "\n".join(statement for statement, _ in harness.calls)
     assert "m.source_match_is_finished" in statements
     assert "sc.last_successful_import_run_id" in statements
+
+
+def test_repository_dashboard_summary_and_change_feed_use_deployed_schema() -> None:
+    now = datetime(2026, 11, 3, 9, 30)
+
+    def resolve(statement: str, parameters: tuple[Any, ...]) -> ResultSet:
+        if "AS total_fixtures" in statement:
+            assert parameters == (1,)
+            return (
+                (
+                    "total_fixtures",
+                    "finished_fixtures",
+                    "upcoming_fixtures",
+                ),
+                [(18, 18, 0)],
+            )
+        if "AS goals_recorded" in statement:
+            assert parameters == (1,)
+            return (("goals_recorded",), [(74,)])
+        if "AS detected_changes" in statement:
+            assert parameters == (1,)
+            return (("detected_changes", "changed_fixtures"), [(2, 1)])
+        if (
+            "latest_successful_sync_at_utc" in statement
+            and "dbo.sync_checkpoints AS sc" in statement
+        ):
+            assert parameters == (1,)
+            return (
+                (
+                    "latest_successful_sync_at_utc",
+                    "latest_successful_snapshot_id",
+                    "latest_successful_import_run_id",
+                ),
+                [(now, 8, 3)],
+            )
+        if "COUNT_BIG(*) AS total" in statement and "dbo.match_changes AS mc" in statement:
+            assert parameters == (1,)
+            return (("total",), [(2,)])
+        if "ss.sha256 AS snapshot_sha256" in statement:
+            assert parameters == (1, 0, 20)
+            return (
+                (
+                    "match_change_id",
+                    "match_id",
+                    "provider_match_id",
+                    "matchday_number",
+                    "home_team",
+                    "away_team",
+                    "field_name",
+                    "change_kind",
+                    "old_value",
+                    "new_value",
+                    "observed_at_utc",
+                    "source_last_update_utc",
+                    "import_run_id",
+                    "source_snapshot_id",
+                    "snapshot_sha256",
+                    "snapshot_retrieved_at_utc",
+                ),
+                [
+                    (
+                        5,
+                        10,
+                        123,
+                        3,
+                        "Alpha FC",
+                        "Beta FC",
+                        "match_is_finished",
+                        "updated",
+                        "false",
+                        "true",
+                        now,
+                        now,
+                        3,
+                        8,
+                        "a" * 64,
+                        now,
+                    )
+                ],
+            )
+        raise AssertionError(f"Unexpected query: {statement}")
+
+    harness = QueryHarness(resolve)
+    repository = SQLServerRepository(harness.connection)
+
+    summary = repository.dashboard_summary(1)
+    changes, total = repository.match_changes(competition_season_id=1, limit=20, offset=0)
+
+    assert summary == {
+        "total_fixtures": 18,
+        "finished_fixtures": 18,
+        "upcoming_fixtures": 0,
+        "goals_recorded": 74,
+        "detected_changes": 2,
+        "changed_fixtures": 1,
+        "latest_successful_sync_at_utc": now.replace(tzinfo=UTC),
+        "latest_successful_snapshot_id": 8,
+        "latest_successful_import_run_id": 3,
+    }
+    assert total == 2
+    assert changes[0]["snapshot_sha256"] == "a" * 64
+    statements = "\n".join(statement for statement, _ in harness.calls)
+    assert "m.competition_season_id = ?" in statements
+    assert "dbo.match_goals AS mg" in statements
+    assert "dbo.match_changes AS mc" in statements
+    assert "COUNT_BIG(DISTINCT mc.match_id) AS changed_fixtures" in statements
+    assert "sc.competition_season_id = ?" in statements
+    assert "INNER JOIN dbo.source_snapshots AS ss" in statements
+
+
+def test_dashboard_summary_logs_safe_component_context_on_query_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def resolve(statement: str, parameters: tuple[Any, ...]) -> ResultSet:
+        assert parameters == (1,)
+        if "AS total_fixtures" in statement:
+            return (
+                (
+                    "total_fixtures",
+                    "finished_fixtures",
+                    "upcoming_fixtures",
+                ),
+                [(18, 18, 0)],
+            )
+        if "AS goals_recorded" in statement:
+            raise RuntimeError("simulated SQL failure; PWD=not-a-real-secret")
+        raise AssertionError(f"Unexpected query: {statement}")
+
+    harness = QueryHarness(resolve)
+    repository = SQLServerRepository(harness.connection)
+    caplog.set_level("ERROR", logger="sports_tracker.api.repository")
+
+    with pytest.raises(RuntimeError, match="simulated SQL failure"):
+        repository.dashboard_summary(1)
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "operation=goal-counts" in messages
+    assert "error_type=RuntimeError" in messages
+    assert "not-a-real-secret" not in messages
 
 
 def test_repository_operations_use_current_provenance_schema() -> None:
