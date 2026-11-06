@@ -55,6 +55,8 @@ class FakeRepository:
 
     def matches(self, **filters: Any) -> tuple[list[dict[str, Any]], int]:
         self.last_filters = filters
+        if filters["finished"] is False:
+            return [self._upcoming_match(), self._upcoming_match(missing_kickoff=True)], 2
         return [self._match()], 1
 
     def dashboard_summary(self, competition_season_id: int | None) -> dict[str, Any]:
@@ -86,6 +88,22 @@ class FakeRepository:
             "last_source_update_utc": datetime(2026, 10, 20, 22, tzinfo=UTC),
         }
 
+    def _upcoming_match(self, *, missing_kickoff: bool = False) -> dict[str, Any]:
+        kickoff_utc = None if missing_kickoff else datetime(2026, 11, 10, tzinfo=UTC)
+        return {
+            "match_id": 12 if missing_kickoff else 11,
+            "provider_match_id": 125 if missing_kickoff else 124,
+            "matchday_number": 5,
+            "stage_name": "League phase",
+            "kickoff_utc": kickoff_utc,
+            "is_finished": False,
+            "home_team": "Future Home FC",
+            "away_team": "Future Away FC",
+            "home_score": None,
+            "away_score": None,
+            "last_source_update_utc": None,
+        }
+
     def match(self, match_id: int) -> dict[str, Any] | None:
         if match_id != 10:
             return None
@@ -104,7 +122,55 @@ class FakeRepository:
         }
 
     def changes(self, match_id: int) -> list[dict[str, Any]]:
-        return []
+        if match_id != 10:
+            return []
+        observed_at = datetime(2026, 11, 3, tzinfo=UTC)
+        return [
+            {
+                "match_change_id": 6,
+                "field_name": "source_match_is_finished",
+                "change_kind": "Updated",
+                "old_value": "false",
+                "new_value": "true",
+                "observed_at_utc": observed_at,
+                "source_last_update_utc": None,
+                "import_run_id": 3,
+                "source_snapshot_id": 8,
+            },
+            {
+                "match_change_id": 7,
+                "field_name": "result.2002.result_type_kind",
+                "change_kind": "Inserted",
+                "old_value": None,
+                "new_value": "After90Minutes",
+                "observed_at_utc": observed_at,
+                "source_last_update_utc": None,
+                "import_run_id": 3,
+                "source_snapshot_id": 8,
+            },
+            {
+                "match_change_id": 8,
+                "field_name": "result.2002.points_team1",
+                "change_kind": "Inserted",
+                "old_value": None,
+                "new_value": "2",
+                "observed_at_utc": observed_at,
+                "source_last_update_utc": None,
+                "import_run_id": 3,
+                "source_snapshot_id": 8,
+            },
+            {
+                "match_change_id": 9,
+                "field_name": "goal.152095.goal_getter_provider_id",
+                "change_kind": "Inserted",
+                "old_value": None,
+                "new_value": "1234",
+                "observed_at_utc": observed_at,
+                "source_last_update_utc": None,
+                "import_run_id": 3,
+                "source_snapshot_id": 8,
+            },
+        ]
 
     def match_changes(
         self,
@@ -126,7 +192,7 @@ class FakeRepository:
                 "matchday_number": 3,
                 "home_team": "Alpha FC",
                 "away_team": "Beta FC",
-                "field_name": "match_is_finished",
+                "field_name": "source_match_is_finished",
                 "change_kind": "updated",
                 "old_value": "false",
                 "new_value": "true",
@@ -207,6 +273,20 @@ def test_match_filters_are_validated_and_forwarded() -> None:
     assert repository.last_filters["search"] == "Alpha"
 
 
+def test_upcoming_fixture_filter_preserves_nullable_scores_and_missing_kickoff() -> None:
+    repository = FakeRepository()
+    client = TestClient(create_app(repository, _settings()))
+
+    response = client.get("/api/matches?finished=false&limit=6")
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    assert all(item["is_finished"] is False for item in response.json()["items"])
+    assert all(item["home_score"] is None for item in response.json()["items"])
+    assert response.json()["items"][1]["kickoff_utc"] is None
+    assert repository.last_filters["finished"] is False
+
+
 def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
     client = TestClient(create_app(FakeRepository(), _settings(writes=True)))
 
@@ -253,13 +333,18 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "Verified source observations" not in dashboard_response.text
     assert (
         "Local-only application. Fixture facts come from preserved OpenLigaDB observations"
-        not in (dashboard_response.text)
+        not in dashboard_response.text
     )
-    assert "UTC API timestamps are displayed in this browser's local timezone" not in (
-        dashboard_response.text
+    assert (
+        "UTC API timestamps are displayed in this browser's local timezone"
+        not in dashboard_response.text
     )
     assert 'rel="icon"' in dashboard_response.text
     assert 'id="fixture-sort"' in dashboard_response.text
+    assert "All matches" in dashboard_response.text
+    assert "Upcoming" in dashboard_response.text
+    assert "Completed" in dashboard_response.text
+    assert 'id="upcoming-list"' in dashboard_response.text
     assert script_response.status_code == 200
     assert "javascript" in script_response.headers["content-type"]
     assert "/api/dashboard-summary" in script_response.text
@@ -271,6 +356,17 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "loadOperations" not in script_response.text
     assert "operationsRequestId" not in script_response.text
     assert "function sortFixtures" in script_response.text
+    assert "function loadUpcomingFixtures" in script_response.text
+    assert "finished: false" in script_response.text
+    assert "Kickoff to be confirmed" in script_response.text
+    assert "function groupChangeEvents" in script_response.text
+    assert "function changeEventSummary" in script_response.text
+    assert "function detailChangeSection" in script_response.text
+    assert "function detailChangeRow" not in script_response.text
+    assert "Match completed" in script_response.text
+    assert "Final score recorded" in script_response.text
+    assert "Goal event added" in script_response.text
+    assert "text: change.field_name" not in script_response.text
     assert "No fixtures match these filters" in script_response.text
     assert 'id="change-page-previous"' in dashboard_response.text
     assert 'id="change-page-next"' in dashboard_response.text
@@ -285,9 +381,12 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert stylesheet_response.status_code == 200
     assert "text/css" in stylesheet_response.headers["content-type"]
     assert ".metric-grid" in stylesheet_response.text
+    assert ".upcoming-fixture" in stylesheet_response.text
     assert ".pagination" in stylesheet_response.text
     assert ".last-updated" in stylesheet_response.text
     assert ".operations-grid" not in stylesheet_response.text
+    assert ".change-field-row" in stylesheet_response.text
+    assert ".detail-change-event-list" in stylesheet_response.text
     assert summary_response.json()["goals_recorded"] == 74
     assert summary_response.json()["detected_changes"] == 1
     assert summary_response.json()["changed_fixtures"] == 1
@@ -357,6 +456,24 @@ def test_match_detail_preserves_typed_results() -> None:
     result = response.json()["results"][0]
     assert result["result_type"] == "After90Minutes"
     assert result["home_score"] == 2
+
+
+def test_match_change_history_keeps_field_level_data_and_provenance() -> None:
+    client = TestClient(create_app(FakeRepository(), _settings()))
+
+    response = client.get("/api/matches/10/changes")
+
+    assert response.status_code == 200
+    changes = response.json()
+    assert {change["field_name"] for change in changes} == {
+        "source_match_is_finished",
+        "result.2002.result_type_kind",
+        "result.2002.points_team1",
+        "goal.152095.goal_getter_provider_id",
+    }
+    assert {change["change_kind"] for change in changes} == {"Inserted", "Updated"}
+    assert {change["source_snapshot_id"] for change in changes} == {8}
+    assert {change["import_run_id"] for change in changes} == {3}
 
 
 def test_match_detail_accepts_genuinely_missing_result_and_goal_scores() -> None:

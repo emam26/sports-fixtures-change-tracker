@@ -10,6 +10,8 @@ const ui = {
   metricGoals: document.querySelector("#metric-goals"),
   metricChanges: document.querySelector("#metric-changes"),
   metricChangesDetail: document.querySelector("#metric-changes-detail"),
+  upcomingStatus: document.querySelector("#upcoming-status"),
+  upcomingList: document.querySelector("#upcoming-list"),
   filters: document.querySelector("#filters"),
   competitionSelect: document.querySelector("#competition"),
   matchdaySelect: document.querySelector("#matchday"),
@@ -40,6 +42,7 @@ const state = {
   matchdayRequestId: 0,
   noteWritesEnabled: false,
   overviewRequestId: 0,
+  upcomingRequestId: 0,
 };
 
 const integerFormatter = new Intl.NumberFormat();
@@ -113,6 +116,347 @@ function scoreText(homeScore, awayScore) {
   return `${homeScore}-${awayScore}`;
 }
 
+const MATCH_FIELD_LABELS = {
+  away_team_id: "Away team",
+  competition_stage: "Competition stage",
+  home_team_id: "Home team",
+  kickoff_utc: "Kickoff time",
+  location: "Venue",
+  matchday_number: "Matchday",
+  source_group_id: "Group reference",
+  source_group_name: "Group name",
+  source_group_order_id: "Group order",
+  source_last_update_raw: "Source update value",
+  source_last_update_utc: "Source update time",
+  source_match_is_finished: "Match status",
+  source_time_zone_id: "Source time zone",
+};
+
+const RESULT_FIELD_LABELS = {
+  points_team1: "Home score",
+  points_team2: "Away score",
+  result_description: "Result description",
+  result_name: "Result label",
+  result_order_id: "Result order",
+  result_type_id: "Result type reference",
+  result_type_kind: "Result type",
+};
+
+const GOAL_FIELD_LABELS = {
+  comment: "Source comment",
+  goal_getter_name: "Scorer",
+  goal_getter_provider_id: "Scorer reference",
+  is_overtime: "Overtime",
+  is_own_goal: "Own goal",
+  is_penalty: "Penalty",
+  match_minute: "Match minute",
+  score_team1: "Home score",
+  score_team2: "Away score",
+  scoring_team_id: "Scoring team reference",
+};
+
+const CHANGE_FIELD_LABELS = {
+  goal: GOAL_FIELD_LABELS,
+  match: MATCH_FIELD_LABELS,
+  result: RESULT_FIELD_LABELS,
+};
+
+function parseChangeField(fieldName) {
+  const parts = String(fieldName ?? "").split(".");
+  if ((parts[0] === "goal" || parts[0] === "result") && parts.length >= 3) {
+    return {
+      recordId: parts[1],
+      scope: parts[0],
+      key: parts.slice(2).join("."),
+    };
+  }
+  return { recordId: null, scope: "match", key: String(fieldName ?? "") };
+}
+
+function normalizeChangeKind(changeKind) {
+  const normalized = String(changeKind ?? "Updated").toLowerCase();
+  if (normalized === "inserted" || normalized === "updated" || normalized === "removed") {
+    return normalized;
+  }
+  return "updated";
+}
+
+function changeKindLabel(changeKind) {
+  const labels = {
+    inserted: "Inserted",
+    removed: "Removed",
+    updated: "Updated",
+  };
+  return labels[normalizeChangeKind(changeKind)];
+}
+
+function changeKindPill(changeKind) {
+  const normalized = normalizeChangeKind(changeKind);
+  return element("span", {
+    className: `status-pill change-kind-${normalized}`,
+    text: changeKindLabel(normalized),
+  });
+}
+
+function isTrue(value) {
+  return String(value).toLowerCase() === "true";
+}
+
+function isFalse(value) {
+  return String(value).toLowerCase() === "false";
+}
+
+function looksLikeTimezoneAwareTimestamp(value) {
+  return /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(String(value));
+}
+
+function formatChangeValue(value, descriptor) {
+  if (value === null || value === undefined || value === "") return "Not supplied";
+  const text = String(value);
+  if (descriptor.key === "source_match_is_finished") {
+    if (isTrue(text)) return "Finished";
+    if (isFalse(text)) return "Not finished";
+  }
+  if (isTrue(text)) return "Yes";
+  if (isFalse(text)) return "No";
+  if (descriptor.key === "match_minute" && /^\d+$/.test(text)) return `${text}'`;
+  if (
+    (descriptor.key === "kickoff_utc" || descriptor.key === "source_last_update_utc") &&
+    looksLikeTimezoneAwareTimestamp(text)
+  ) {
+    return formatDate(text);
+  }
+  return text;
+}
+
+function changeFieldLabel(descriptor) {
+  return CHANGE_FIELD_LABELS[descriptor.scope]?.[descriptor.key] ?? "Additional source detail";
+}
+
+function groupChangeEvents(changes) {
+  const groups = new Map();
+  changes.forEach((change) => {
+    const descriptor = parseChangeField(change.field_name);
+    const key = [
+      descriptor.scope,
+      descriptor.recordId ?? "fixture",
+      normalizeChangeKind(change.change_kind),
+      change.observed_at_utc,
+      change.source_snapshot_id,
+      change.import_run_id,
+    ].join("|");
+    const existing = groups.get(key);
+    if (existing) {
+      existing.changes.push({ change, descriptor });
+      return;
+    }
+    groups.set(key, {
+      changes: [{ change, descriptor }],
+      kind: normalizeChangeKind(change.change_kind),
+      scope: descriptor.scope,
+    });
+  });
+  return [...groups.values()];
+}
+
+function groupHasField(group, fields) {
+  return group.changes.some(({ descriptor }) => fields.includes(descriptor.key));
+}
+
+function groupResultTypeLooksFinal(group) {
+  return group.changes.some(({ change, descriptor }) => {
+    if (descriptor.key !== "result_type_kind") return false;
+    return [change.old_value, change.new_value].some((value) =>
+      /after90minutes/i.test(String(value ?? "")),
+    );
+  });
+}
+
+function changeEventSummary(group) {
+  const scoresChanged = groupHasField(group, ["points_team1", "points_team2"]);
+  if (group.scope === "match") {
+    const statusChange = group.changes.find(
+      ({ descriptor }) => descriptor.key === "source_match_is_finished",
+    );
+    if (statusChange) {
+      if (group.kind === "inserted") return "Match status recorded";
+      if (group.kind === "removed") return "Match status removed";
+      if (isFalse(statusChange.change.old_value) && isTrue(statusChange.change.new_value)) {
+        return "Match completed";
+      }
+      if (isTrue(statusChange.change.old_value) && isFalse(statusChange.change.new_value)) {
+        return "Match marked unfinished";
+      }
+      return "Match status changed";
+    }
+    if (groupHasField(group, ["kickoff_utc"])) {
+      return group.kind === "inserted"
+        ? "Kickoff time recorded"
+        : group.kind === "removed"
+          ? "Kickoff time removed"
+          : "Kickoff time changed";
+    }
+    if (groupHasField(group, ["location"])) {
+      return group.kind === "inserted"
+        ? "Venue recorded"
+        : group.kind === "removed"
+          ? "Venue removed"
+          : "Venue changed";
+    }
+    return `Fixture information ${changeKindLabel(group.kind).toLowerCase()}`;
+  }
+  if (group.scope === "result") {
+    if (groupResultTypeLooksFinal(group) && scoresChanged) {
+      if (group.kind === "inserted") return "Final score recorded";
+      if (group.kind === "removed") return "Final score removed";
+      return "Final score updated";
+    }
+    if (scoresChanged) {
+      if (group.kind === "inserted") return "Result score recorded";
+      if (group.kind === "removed") return "Result score removed";
+      return "Result score updated";
+    }
+    if (group.kind === "inserted") return "Result record added";
+    if (group.kind === "removed") return "Result record removed";
+    return "Result details updated";
+  }
+  if (group.scope === "goal") {
+    if (group.kind === "inserted") return "Goal event added";
+    if (group.kind === "removed") return "Goal event removed";
+    return "Goal event updated";
+  }
+  return `Source information ${changeKindLabel(group.kind).toLowerCase()}`;
+}
+
+function changeScopeLabel(scope) {
+  if (scope === "goal") return "goal field";
+  if (scope === "result") return "result field";
+  return "fixture field";
+}
+
+function changeEventDescription(group) {
+  const count = group.changes.length;
+  const scope = changeScopeLabel(group.scope);
+  const action = changeKindLabel(group.kind).toLowerCase();
+  return `${formatCount(count)} ${scope}${count === 1 ? "" : "s"} ${action}.`;
+}
+
+function changeEventProvenance(group) {
+  const { change } = group.changes[0];
+  const provenance = element("div", { className: "change-event-provenance" });
+  const snapshot = change.snapshot_sha256
+    ? `Snapshot ${change.source_snapshot_id} / ${compactHash(change.snapshot_sha256)}`
+    : `Snapshot ${change.source_snapshot_id}`;
+  provenance.append(
+    element("span", {
+      text: `Observed in source snapshot: ${formatDate(change.observed_at_utc)}`,
+    }),
+    element("span", { text: snapshot }),
+    element("span", { text: `Import run ${change.import_run_id}` }),
+  );
+  if (change.snapshot_retrieved_at_utc) {
+    provenance.append(
+      element("span", {
+        text: `Captured: ${formatDate(change.snapshot_retrieved_at_utc)}`,
+      }),
+    );
+  }
+  if (change.source_last_update_utc) {
+    provenance.append(
+      element("span", {
+        text: `Provider update: ${formatDate(change.source_last_update_utc)}`,
+      }),
+    );
+  }
+  return provenance;
+}
+
+function changeFieldValues(change, descriptor, changeKind) {
+  const values = element("div", { className: "change-field-values" });
+  if (changeKind === "inserted") {
+    values.append(
+      element("span", { className: "change-value-label", text: "Recorded" }),
+      element("strong", { text: formatChangeValue(change.new_value, descriptor) }),
+    );
+    return values;
+  }
+  if (changeKind === "removed") {
+    values.append(
+      element("span", { className: "change-value-label", text: "Previous value" }),
+      element("strong", { text: formatChangeValue(change.old_value, descriptor) }),
+    );
+    return values;
+  }
+  values.classList.add("is-comparison");
+  const before = element("div", { className: "change-field-value" });
+  before.append(
+    element("span", { className: "change-value-label", text: "Previous" }),
+    element("strong", { text: formatChangeValue(change.old_value, descriptor) }),
+  );
+  const after = element("div", { className: "change-field-value" });
+  after.append(
+    element("span", { className: "change-value-label", text: "Current" }),
+    element("strong", { text: formatChangeValue(change.new_value, descriptor) }),
+  );
+  values.append(
+    before,
+    element("span", {
+      className: "change-arrow",
+      text: "→",
+      attributes: { "aria-hidden": "true" },
+    }),
+    after,
+  );
+  return values;
+}
+
+function changeFieldDetails(group) {
+  const details = element("details", { className: "change-field-details" });
+  const count = group.changes.length;
+  details.append(
+    element("summary", {
+      text: `Show ${formatCount(count)} recorded field ${count === 1 ? "detail" : "details"}`,
+    }),
+  );
+  const list = element("ul", { className: "change-field-list" });
+  group.changes.forEach(({ change, descriptor }) => {
+    const row = element("li", { className: "change-field-row" });
+    row.append(
+      element("strong", {
+        className: "change-field-label",
+        text: changeFieldLabel(descriptor),
+      }),
+      changeFieldValues(change, descriptor, group.kind),
+    );
+    list.append(row);
+  });
+  details.append(list);
+  return details;
+}
+
+function changeEvent(group, match = null) {
+  const event = element("article", { className: "change-event" });
+  const header = element("div", { className: "change-event-header" });
+  const title = element("div", { className: "change-event-title" });
+  if (match) {
+    title.append(
+      element("p", {
+        className: "change-match",
+        text: `${valueOrNotSupplied(match.home_team)} vs ${valueOrNotSupplied(match.away_team)}`,
+      }),
+    );
+  }
+  title.append(element("h4", { text: changeEventSummary(group) }));
+  header.append(title, changeKindPill(group.kind));
+  event.append(
+    header,
+    element("p", { className: "change-event-description", text: changeEventDescription(group) }),
+    changeEventProvenance(group),
+    changeFieldDetails(group),
+  );
+  return event;
+}
+
 function compactHash(value) {
   if (!value) return "Hash not recorded";
   return value.length > 16 ? `${value.slice(0, 12)}...${value.slice(-4)}` : value;
@@ -181,7 +525,9 @@ function renderListState(container, title, detail, tone = "empty") {
 
 function statusClass(status) {
   const normalized = String(status ?? "unknown").toLowerCase();
-  if (normalized === "succeeded" || normalized === "imported") return "is-success";
+  if (normalized === "succeeded" || normalized === "imported" || normalized === "completed") {
+    return "is-success";
+  }
   if (normalized === "failed") return "is-danger";
   if (normalized === "skipped" || normalized === "started") return "is-neutral";
   return "is-neutral";
@@ -192,7 +538,7 @@ function statusPill(text) {
 }
 
 function sourcePill(match) {
-  return statusPill(match.is_finished ? "Finished" : "Upcoming");
+  return statusPill(match.is_finished ? "Completed" : "Upcoming");
 }
 
 function describeRequestFailure(subject, error) {
@@ -350,8 +696,8 @@ async function loadOverview() {
   }
 }
 
-function sortFixtures(matches) {
-  const direction = ui.sortSelect?.value === "kickoff-desc" ? -1 : 1;
+function sortFixtures(matches, sortOrder = ui.sortSelect?.value ?? "kickoff-asc") {
+  const direction = sortOrder === "kickoff-desc" ? -1 : 1;
   return [...matches].sort((left, right) => {
     const leftTime = left.kickoff_utc ? Date.parse(left.kickoff_utc) : Number.NaN;
     const rightTime = right.kickoff_utc ? Date.parse(right.kickoff_utc) : Number.NaN;
@@ -362,6 +708,92 @@ function sortFixtures(matches) {
     if (leftTime !== rightTime) return (leftTime - rightTime) * direction;
     return (Number(left.match_id) - Number(right.match_id)) * direction;
   });
+}
+
+function fixtureKickoffText(match) {
+  const stage = match.stage_name ? `${match.stage_name} / ` : "";
+  if (!match.kickoff_utc) {
+    const status = match.is_finished ? "Kickoff not recorded" : "Kickoff to be confirmed";
+    return `${stage}${status}`;
+  }
+  return `${stage}${formatDate(match.kickoff_utc)}`;
+}
+
+function renderUpcomingFixtures(page) {
+  const matches = sortFixtures(page.items, "kickoff-asc");
+  ui.upcomingList.replaceChildren();
+  if (matches.length === 0) {
+    renderListState(
+      ui.upcomingList,
+      "No upcoming fixture records",
+      "No unfinished fixtures have been imported for this competition selection.",
+    );
+    setStatus(ui.upcomingStatus, "No unfinished fixture records are currently loaded.", "ok");
+    return;
+  }
+
+  matches.forEach((match) => {
+    const item = element("article", { className: "upcoming-fixture" });
+    const identity = element("div", { className: "upcoming-fixture-identity" });
+    identity.append(
+      element("strong", { text: `${match.home_team} vs ${match.away_team}` }),
+      element("span", {
+        className: "metadata",
+        text: `Matchday ${valueOrNotSupplied(match.matchday_number)}`,
+      }),
+    );
+    const details = element("div", { className: "upcoming-fixture-details" });
+    details.append(
+      sourcePill(match),
+      element("span", { text: fixtureKickoffText(match) }),
+      element("span", { className: "metadata", text: "Score: Not supplied" }),
+    );
+    const button = element("button", {
+      className: "button button-quiet",
+      text: "View match",
+    });
+    button.type = "button";
+    button.addEventListener("click", () => showMatch(match.match_id));
+    item.append(identity, details, button);
+    ui.upcomingList.append(item);
+  });
+  const missingKickoffs = matches.filter((match) => !match.kickoff_utc).length;
+  const displayCount = `${formatCount(matches.length)} of ${formatCount(page.total)}`;
+  const suffix = missingKickoffs
+    ? " Fixtures without a provider kickoff appear after scheduled fixtures."
+    : "";
+  setBusy(ui.upcomingList, false);
+  setStatus(
+    ui.upcomingStatus,
+    `${displayCount} upcoming fixture records shown in chronological kickoff order.${suffix}`,
+    "ok",
+  );
+}
+
+async function loadUpcomingFixtures() {
+  const requestId = ++state.upcomingRequestId;
+  setBusy(ui.upcomingList, true);
+  setStatus(ui.upcomingStatus, "Loading unfinished fixtures...", "loading");
+  ui.upcomingList.replaceChildren(
+    contentState("Loading upcoming fixtures", "Querying unfinished fixture records.", "loading"),
+  );
+  try {
+    const page = await request(
+      apiPath("/api/matches", {
+        competition_season_id: selectedCompetitionId(),
+        finished: false,
+        limit: 6,
+      }),
+    );
+    if (requestId !== state.upcomingRequestId) return;
+    renderUpcomingFixtures(page);
+  } catch (error) {
+    if (requestId !== state.upcomingRequestId) return;
+    const message = describeRequestFailure("Upcoming fixtures", error);
+    renderListState(ui.upcomingList, "Upcoming fixtures are unavailable", message, "error");
+    setStatus(ui.upcomingStatus, message, "error");
+    showAppAlert(message);
+  }
 }
 
 function fixtureCard(match) {
@@ -384,9 +816,8 @@ function fixtureCard(match) {
   );
 
   const footer = element("div", { className: "fixture-footer" });
-  const stage = match.stage_name ? `${match.stage_name} / ` : "";
   footer.append(
-    element("p", { className: "fixture-time", text: `${stage}${formatDate(match.kickoff_utc)}` }),
+    element("p", { className: "fixture-time", text: fixtureKickoffText(match) }),
     element("p", {
       className: "metadata",
       text: `Source updated ${formatDate(match.last_source_update_utc)}`,
@@ -446,54 +877,20 @@ async function loadFixtures() {
   }
 }
 
-function changeCard(change) {
-  const card = element("article", { className: "change-card" });
-  const heading = element("div", { className: "change-heading" });
-  heading.append(
-    element("div", {
-      className: "change-match",
-      text: `${valueOrNotSupplied(change.home_team)} vs ${valueOrNotSupplied(change.away_team)}`,
-    }),
-    statusPill(change.change_kind),
-  );
-  const values = element("div", { className: "change-values" });
-  const before = element("div", { className: "change-value" });
-  before.append(
-    element("span", { text: "Before" }),
-    element("strong", { text: valueOrNotSupplied(change.old_value) }),
-  );
-  const after = element("div", { className: "change-value" });
-  after.append(
-    element("span", { text: "After" }),
-    element("strong", { text: valueOrNotSupplied(change.new_value) }),
-  );
-  values.append(
-    before,
-    element("span", {
-      className: "change-arrow",
-      text: "->",
-      attributes: { "aria-hidden": "true" },
-    }),
-    after,
-  );
-
-  const provenance = element("div", { className: "change-provenance" });
-  provenance.append(
-    element("span", { text: `Field: ${change.field_name}` }),
-    element("span", { text: `Observed: ${formatDate(change.observed_at_utc)}` }),
-    element("span", {
-      text: `Snapshot ${change.source_snapshot_id} / ${compactHash(change.snapshot_sha256)}`,
-    }),
-    element("span", { text: `Captured: ${formatDate(change.snapshot_retrieved_at_utc)}` }),
-  );
-  const button = element("button", { className: "button button-quiet", text: "Open fixture" });
+function changeCard(group) {
+  const sourceChange = group.changes[0].change;
+  const card = changeEvent(group, sourceChange);
+  const button = element("button", {
+    className: "button button-quiet",
+    text: "Open fixture",
+  });
   button.type = "button";
-  button.addEventListener("click", () => showMatch(change.match_id));
-  card.append(heading, values, provenance, button);
+  button.addEventListener("click", () => showMatch(sourceChange.match_id));
+  card.append(button);
   return card;
 }
 
-function renderChangePagination(total, itemCount) {
+function renderChangePagination(total, itemCount, groupCount) {
   if (!ui.changePagination) return;
   const hasRecords = total > 0;
   ui.changePagination.hidden = !hasRecords;
@@ -501,9 +898,14 @@ function renderChangePagination(total, itemCount) {
 
   const first = state.changeOffset + 1;
   const last = Math.min(state.changeOffset + itemCount, total);
+  const groupLabel = groupCount === 1 ? "grouped event" : "grouped events";
+  const description = [
+    `Showing ${formatCount(first)}-${formatCount(last)} of ${formatCount(total)} field-level changes`,
+    `(${formatCount(groupCount)} ${groupLabel} on this page).`,
+  ].join(" ");
   setText(
     ui.changePageDescription,
-    `Showing ${formatCount(first)}-${formatCount(last)} of ${formatCount(total)} observed changes.`,
+    description,
   );
   ui.previousChangePage.disabled = state.changeOffset === 0;
   ui.nextChangePage.disabled = state.changeOffset + itemCount >= total;
@@ -529,6 +931,7 @@ async function loadChanges({ reset = false } = {}) {
       await loadChanges();
       return;
     }
+    const groups = groupChangeEvents(page.items);
     ui.changeList.replaceChildren();
     if (page.items.length === 0) {
       renderListState(
@@ -537,13 +940,13 @@ async function loadChanges({ reset = false } = {}) {
         "No field-level transitions have been recorded for this competition selection.",
       );
     } else {
-      page.items.forEach((change) => ui.changeList.append(changeCard(change)));
+      groups.forEach((group) => ui.changeList.append(changeCard(group)));
       setBusy(ui.changeList, false);
     }
-    renderChangePagination(page.total, page.items.length);
+    renderChangePagination(page.total, page.items.length, groups.length);
     setStatus(
       ui.changesStatus,
-      `${formatCount(page.total)} recorded change${page.total === 1 ? "" : "s"}.`,
+      `${formatCount(page.total)} recorded field-level change${page.total === 1 ? "" : "s"}.`,
       "ok",
     );
   } catch (error) {
@@ -595,14 +998,35 @@ function detailList(title, items, formatter, emptyMessage) {
   return section;
 }
 
-function detailChangeRow(change) {
-  const row = element("li", { className: "timeline-row" });
-  row.append(
-    element("strong", { text: change.field_name }),
-    element("span", { text: `${valueOrNotSupplied(change.old_value)} -> ${valueOrNotSupplied(change.new_value)}` }),
-    element("span", { className: "metadata", text: formatDate(change.observed_at_utc) }),
+function detailChangeSection(changes) {
+  const section = element("section", { className: "detail-section change-detail-section" });
+  section.append(element("h3", { text: "Observed changes" }));
+  if (!changes || changes.length === 0) {
+    section.append(
+      element("p", {
+        className: "metadata",
+        text: "No field-level changes have been recorded for this fixture.",
+      }),
+    );
+    return section;
+  }
+  const groups = groupChangeEvents(changes);
+  const summary = [
+    `${formatCount(changes.length)} stored field-level change${changes.length === 1 ? "" : "s"}`,
+    `grouped into ${formatCount(groups.length)} event${groups.length === 1 ? "" : "s"}.`,
+  ].join(" ");
+  section.append(
+    element("p", {
+      className: "metadata",
+      text: summary,
+    }),
   );
-  return row;
+  const list = element("div", {
+    className: "change-event-list detail-change-event-list",
+  });
+  groups.forEach((group) => list.append(changeEvent(group)));
+  section.append(list);
+  return section;
 }
 
 function noteToken() {
@@ -801,14 +1225,7 @@ function buildMatchDetail(match, changes, notes, issues) {
   if (issues.changes) {
     provenance.append(detailList("Observed changes", [], () => element("li"), issues.changes));
   } else {
-    provenance.append(
-      detailList(
-        "Observed changes",
-        changes,
-        detailChangeRow,
-        "No field-level changes have been recorded for this fixture.",
-      ),
-    );
+    provenance.append(detailChangeSection(changes));
   }
   const noteStatus = createNoteStatus();
   if (issues.notes) {
@@ -869,6 +1286,7 @@ async function refreshDashboard() {
     loadHealth(),
     loadServiceStatus(),
     loadOverview(),
+    loadUpcomingFixtures(),
     loadFixtures(),
     loadChanges({ reset: true }),
   ]);
@@ -891,7 +1309,12 @@ function attachEventListeners() {
     renderCompetitionContext();
     const matchdaysLoaded = await loadMatchdays();
     if (!matchdaysLoaded) return;
-    await Promise.all([loadOverview(), loadFixtures(), loadChanges({ reset: true })]);
+    await Promise.all([
+      loadOverview(),
+      loadUpcomingFixtures(),
+      loadFixtures(),
+      loadChanges({ reset: true }),
+    ]);
   });
   ui.sortSelect.addEventListener("change", () => {
     if (state.fixturePage) {
@@ -905,7 +1328,12 @@ function attachEventListeners() {
     renderCompetitionContext();
     const matchdaysLoaded = await loadMatchdays();
     if (!matchdaysLoaded) return;
-    await Promise.all([loadOverview(), loadFixtures(), loadChanges({ reset: true })]);
+    await Promise.all([
+      loadOverview(),
+      loadUpcomingFixtures(),
+      loadFixtures(),
+      loadChanges({ reset: true }),
+    ]);
   });
   document.querySelector("#refresh-dashboard").addEventListener("click", refreshDashboard);
   document.querySelector("#refresh-changes").addEventListener("click", loadChanges);

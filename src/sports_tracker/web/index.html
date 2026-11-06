@@ -12,8 +12,8 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230a1b35'/%3E%3Cpath d='M16 32h32M32 16v32' stroke='%2390bdfb' stroke-width='6'/%3E%3C/svg%3E"
     >
-    <link rel="stylesheet" href="/assets/styles.css?v=20261106-public-dashboard">
-    <script src="/assets/app.js?v=20261106-public-dashboard" defer></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=20261107-season-coverage">
+    <script src="/assets/app.js?v=20261107-season-coverage" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -96,6 +96,24 @@
             <small id="metric-changes-detail">Across loaded fixtures</small>
           </article>
         </div>
+
+        <section class="upcoming-panel" aria-labelledby="upcoming-fixtures-title">
+          <div class="upcoming-panel-heading">
+            <div>
+              <p class="eyebrow">Scheduled next</p>
+              <h3 id="upcoming-fixtures-title">Upcoming fixtures</h3>
+            </div>
+            <p id="upcoming-status" class="status-message" role="status" aria-live="polite">
+              Loading unfinished fixturesâ€¦
+            </p>
+          </div>
+          <div id="upcoming-list" class="upcoming-fixture-list" aria-live="polite" aria-busy="true">
+            <div class="content-state loading-state">
+              <span class="loading-dot" aria-hidden="true"></span>
+              Loading upcoming fixturesâ€¦
+            </div>
+          </div>
+        </section>
       </section>
 
       <section id="match-explorer" class="dashboard-section" aria-labelledby="match-explorer-title">
@@ -125,9 +143,9 @@
           <label>
             Match status
             <select id="finished" name="finished">
-              <option value="">All statuses</option>
-              <option value="true">Finished</option>
+              <option value="">All matches</option>
               <option value="false">Upcoming</option>
+              <option value="true">Completed</option>
             </select>
           </label>
           <label>
@@ -176,10 +194,6 @@
             Refresh changes
           </button>
         </div>
-        <p class="section-intro">
-          Changes are recorded only when distinct snapshots show a field-level transition.
-          Replaying unchanged source data does not create a business change.
-        </p>
         <p id="changes-status" class="status-message" role="status" aria-live="polite">
           Loading observed changes…
         </p>
