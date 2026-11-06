@@ -6,6 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import pyodbc
+
 from sports_tracker.config import (
     ConfigurationError,
     load_database_settings,
@@ -90,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 3
-    except OSError:
+    except (OSError, pyodbc.Error):
         print(
             "Snapshot import failed: could not access the configured database.",
             file=sys.stderr,

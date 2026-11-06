@@ -1,352 +1,247 @@
 # Build Plan
 
-## Implementation update — 2026-11-03
+## Current scope
 
-This status supersedes older summaries where they differ; historical evidence
-below remains intact.
-
-### Manual development-database recovery plan - 2026-11-04
-
-Owner-supplied SQL Server state shows a failed first-import recovery case in the
-dedicated `SportsFixturesTracker` development database: import runs `1`
-(`Started`) and `2` (`Failed`) both reference source snapshot `7`; the database
-contains 14 teams, 7 matches, 14 results, 32 goals, and one snapshot. The owner
-reports that the database was empty before these failed imports and that the
-latest non-SQL suite passed 56 tests. These facts are owner-supplied; no SQL,
-tests, or imports were run in this handoff.
-
-`sql/manual_reset_development_import_data.sql` now provides a read-only preview
-and a separately commented destructive block. The execution block is restricted
-to `SportsFixturesTracker`, repeats the exact observed-state checks inside a
-serializable transaction, requires the operator to replace a `NULL` confirmation
-value with an explicit token, verifies server `CANVASIT`, preserves local notes
-by refusing to proceed when any exist, deletes dependencies before parents, and
-verifies all 12 application tables are empty before commit. It is only for
-resetting this dedicated disposable development database after a manual full
-backup; it must not be used for legitimate development, test, or production
-records. Manual review and execution remain **NOT RUN**.
-
-### Import atomicity and team-icon normalization repair — 2026-11-03
-
-The reported SQL Server 2628 failure was caused by an OpenLigaDB
-`teamIconUrl` containing a Base64 `data:` URI. The deployed
-`dbo.teams.team_icon_url` column is nullable `nvarchar(2048)`, so the importer
-now treats it only as optional external URL metadata: absolute HTTP(S) URLs up
-to 2,048 characters are retained; embedded, malformed, and oversized values are
-replaced with `NULL` and a password-safe warning that contains no URI content.
-Team provider identity and fixture loading are unchanged. No schema migration is
-required.
-
-Inspection also clarified why rows can remain after a failed import. Current
-domain writes (teams, matches, results, goals, changes, and checkpoints) belong
-to the primary transaction and must disappear after a successful rollback. The
-snapshot, competition, season, failed import run, and validation issue are
-intentional post-rollback provenance, committed separately. The importer now
-uses explicit `autocommit=False`, no longer invokes a redundant rollback while
-recording failure provenance, and does not commit that provenance if the primary
-rollback itself fails. In the latter case it reports that database state is
-unconfirmed rather than claiming a successful rollback.
-
-New offline tests cover safe HTTP(S) URLs, embedded-data omission, oversized URL
-omission, rollback of newly inserted teams before a fixture failure, rollback
-failure handling, and explicit connection autocommit. These tests are **NOT
-RUN**. The dashboard was inspected: it does not expose or render team icons, so
-embedded provider data cannot reach the browser through the current UI.
-
-Owner-supplied evidence immediately before this repair: the focused diagnostic
-tests passed (`4 passed`), and the non-SQL suite passed (`47 passed, 1
-deselected, 1 warning`). The same static-check pass still reported one import
-ordering violation in `ingestion.py` and one formatting violation in
-`test_sql_diagnostics.py`; all verification after this repair remains **NOT
-RUN**.
-
-### Rollback regression correction - 2026-11-04
-
-The failing in-memory rollback regression did not reach the configured
-`insert_match` failure point. Its fixture changed the home and away provider
-team IDs to `30` and `40`, but left goals assigned to the original IDs `10` and
-`20`. Snapshot validation correctly rejected that inconsistent record before
-the transactional fixture loop. The fixture helper now keeps goal scoring-team
-IDs aligned with overridden test-team IDs.
-
-The main regression now injects a failure at checkpoint advancement, after new
-teams, a match, two results, and three goals have been written. Its
-non-transactional operation log proves those writes were attempted, while
-post-failure assertions prove rollback removed every domain write and the
-checkpoint. It separately verifies the expected committed failure provenance:
-the snapshot, competition, season, failed import run, and its safe diagnostic
-issue. A focused companion test still injects exactly at `insert_match` and
-proves that the call is reached after the new team upserts.
-
-Inspection of the SQL Server store found no additional transaction-safety
-defect in this path: connections are opened with `autocommit=False`, primary
-domain writes share that connection transaction, and failure provenance is
-written only after the primary rollback succeeds. These updated offline tests
-are **NOT RUN**.
-
-### Evaluation CLI repair — 2026-11-03
-
-The offline evaluation CLI now loads validated OpenLigaDB settings and passes
-them to `load_snapshot`, matching `scripts/import_snapshot.py`. A regression
-test verifies that the configured `OpenLigaDBSettings` object reaches the
-loader. Inspection found no other CLI call sites omitting this required
-argument. Duplicate class docstrings introduced in the configuration and
-ingestion modules were removed. These edits remain **NOT RUN** pending manual
-verification.
-
-### SQL import cursor-result handling — 2026-11-03
-
-The first Matchday 3 SQL import exposed `ProgrammingError: No results. Previous
-SQL was not a query.` during `ensure_snapshot`; the same issue prevented the
-failed-run recorder from creating its diagnostic run. The cause was confirmed in
-the store: identity-returning batches execute DML followed by
-`SELECT SCOPE_IDENTITY()`, but the code called `fetchone()` before advancing
-past SQL Server's intermediate non-row result. `SQLServerImportStore` now checks
-the cursor description and uses `nextset()` until the identity result set is
-active, or raises a clear error if no identity result is returned. The same
-central helper covers snapshot, run, team, match, result, and goal inserts, so
-failed-run recording uses the corrected path as well.
-
-The importer retains operation names for SQL-store errors and keeps the original
-safe exception summary for stores without operation metadata. Rollback and
-failed-run-recording failures remain separately logged. SQL statements,
-parameters, connection strings, and credentials are not logged. No schema
-change was necessary. New offline cursor-result regression tests and the
-rollback test correction remain **NOT RUN**.
-
-### Repair follow-up — first verification pass
-
-The user reported that collection stopped in three test modules because the new
-runtime adapter imported a nonexistent `load_sql_server_settings` name. The
-existing configuration contract is `load_database_settings`; the adapter now uses
-that loader lazily inside `open_sql_server_connection`, so module import does not
-attempt a connection. The remaining reported unused import and test import-order
-findings were also corrected. Targeted manual formatting normalization was applied
-to all six files named by Ruff without executing the formatter. All corrections in
-this follow-up remain **NOT RUN** pending user verification.
-
-### Repair follow-up — second verification pass
-
-The user reported `37 passed, 6 failed, 1 deselected`, one Ruff import-order
-finding, and five files still requiring formatting. All six failures were isolated
-to new retry/last-change tests: the URL builder was called with the wrong shape,
-test settings omitted the required descriptive user agent, `RetryPolicy` lacked
-its own bounds checks, and direct `LastChangeSignal` construction omitted response
-metadata. The tests now use the implemented configuration and signal interfaces,
-while the implementation validates retry bounds and finite positive backoff values.
-No HTTP test uses the real network. These edits and the remaining manual formatting
-normalization are **NOT RUN** pending the next user verification pass.
-
-| Stage | Implementation status | Verification status |
-|---|---|---|
-| 0 — foundation | Complete | Manually verified 2026-11-02 |
-| 1 — source capture | Complete | Manually verified 2026-11-02 |
-| 2 — SQL schema | Complete; 12 tables deployed | Verified; user supplied commit `9d05663` |
-| 3 — typed import | Repaired after reported lint/test failure | **NOT RUN after repair** |
-| 4 — offline ETL and replay | Implemented on Stage 3 importer | **NOT RUN** |
-| 5 — synchronization and recovery | Implemented | **NOT RUN** |
-| 6 — local FastAPI service | Implemented | **NOT RUN** |
-| 7 — browser dashboard | Implemented | **NOT RUN** |
-| 8 — one-shot scheduling support | Implemented; no task activated | **NOT RUN** |
-| 9 — test/evaluation framework | Implemented | **NOT RUN** |
-| 10 — documentation and handoff | Implemented in working tree | Review pending |
-
-No Stage 3–10 verification, database import, live request, server start, browser
-check, or scheduler activation was performed during this handoff.
-
-### Stage 3 repair
-
-The last user-supplied diagnostics were 37 Ruff findings, three files requiring
-formatting, and one failing test (`21 passed, 1 failed`). The rollback test changed
-a final result but injected at `update_match`; final-score persistence actually
-uses `update_result`. It now injects at the real operation, proves exact rollback
-of result/goal/change/checkpoint state, injects again at checkpoint advancement,
-and finally proves a clean retry can succeed.
-
-A genuine failure-recording defect was corrected: failed-run season creation now
-receives the snapshot league ID instead of the season value. Reported import-order,
-unused-import, line-length, and formatting defects were edited without weakening
-Ruff configuration. These corrections remain **NOT RUN**.
-
-### Stage 4–10 behavior
-
-- Saved snapshots support validation, deterministic offline replay, SQL upsert,
-  provenance, field-level changes, rollback, and safe retry.
-- The synchronizer skips a full request only when a reliable timezone-aware source
-  timestamp is not newer than the committed checkpoint. Ambiguity forces a fetch.
-- Retries are bounded and limited to network errors, HTTP 429, and selected 5xx
-  responses; there is no polling loop.
-- FastAPI is loopback-only by default. Queries are parameterized. Local note writes
-  are disabled by default and require a separate token when enabled.
-- The dashboard exposes fixtures, typed results/goals, history, import runs, and
-  validation issues while rendering source text safely.
-- Scheduling is a user-activated one-shot wrapper with an overlap lock and ignored,
-  rotating structured logs.
-
-### Schema decision
-
-No migration is introduced. The deployed 12 tables already model snapshots,
-imports, current state, changes, checkpoints, issues, and notes. Any future index
-must be a numbered migration justified by measured query-plan evidence; do not
-mutate a deployed database by editing `001_initial_schema.sql`.
-
-### Current blocker and next step
-
-Verification is the blocker. In WSL Bash at
-`/mnt/f/sports-fixtures-change-tracker`, activate the existing environment, install
-the updated editable dependencies, and run `ruff check .`. Stop on failure and
-return the complete non-secret output. The full order is in `MANUAL_RUNBOOK.md`.
-
-### Files changed in this handoff
-
-Stage 3 repair changed `scripts/import_snapshot.py`,
-`src/sports_tracker/ingestion.py`, and `tests/test_ingestion.py`. Later stages add
-runtime configuration, synchronization, API code, dashboard assets, operational
-scripts, isolated tests, and handoff documentation. `.env`, raw snapshot bytes,
-deployed SQL, and secrets were not changed.
-
-## Project scope
-
-The current implementation targets UEFA Champions League 2026/27 through
-OpenLigaDB:
+The project implements UEFA Champions League 2026/27 through OpenLigaDB:
 
 - shortcut: `ucl`
 - season: `2026`
 - expected league ID: `4946`
-- initial matchdays: 3 and 4
-- eventual coverage: all 144 league-phase fixtures and later knockout fixtures
+- initial proof scope: Matchdays 3 and 4
+- planned expansion after evaluation: all 144 league-phase fixtures and later
+  knockout fixtures
 
-The code keeps provider, competition, season, and matchday values configurable
-for future competitions. It does not claim that any future competition is
-implemented.
+Competition identity remains configurable for future work, but no other competition
+is currently implemented or claimed.
 
-## Stage status
+## Stage status - 2026-11-06
 
-### Stage 0 — project foundation
+| Stage | Implemented state | Evidence state |
+| --- | --- | --- |
+| 0 - foundation | src package, configuration, SQL connection, tooling | Owner verified |
+| 1 - source capture | bounded client, contract checks, immutable raw snapshots | Owner verified on MD3/MD4 |
+| 2 - SQL schema | 12-table SQL Server schema | Owner reports deployed |
+| 3 - typed import | validation, upserts, provenance, changes, rollback, checkpoints | First MD3 import verified; replay/MD4 pending |
+| 4 - offline replay/evaluation | dry-run and deterministic evaluation CLIs | Prior dry run verified; latest edits not run |
+| 5 - incremental synchronization | last-change decision, retries, lock, logs, partial failures | Latest implementation not run |
+| 6 - local FastAPI | status, discovery, fixtures, history, operations, notes | Latest implementation not run |
+| 7 - browser dashboard | filters, detail, operations, optional notes | Not run in browser |
+| 8 - one-shot scheduling support | WSL wrapper and Task Scheduler handoff | No task registered or activated |
+| 9 - test/evaluation framework | offline, mocked, repository, SQL-gated plans | Latest suite not run |
+| 10 - portfolio documentation | architecture, API, testing, evaluation, runbook | Updated; owner review pending |
 
-Complete and verified from owner-supplied evidence. The repository contains the
-src-based Python package, configuration, SQL Server connection helper, tests,
-and manual setup documentation. The owner reported successful Python 3.14.4
-environment setup, pyodbc 5.3.0 installation, manual connection, and the
-database check script.
+No release-readiness command was executed during the 2026-11-06 audit. Static
+checks, tests, SQL replay/import, HTTP, API server, browser, scheduler, and Git review
+are **NOT RUN** for the latest working tree.
 
-The owner’s 2026-11-02 verification record also reports successful editable
-installation, Ruff lint, Ruff formatting with 10 files formatted, and pytest
-with 5 tests in 0.13 seconds. The database check reported server `CANVASIT`,
-login `sports_tracker_app`, database `SportsFixturesTracker`, edition
-`Standard Developer Edition (64-bit)`, and version `17.0.1000.7`. `.env` is
-Git-ignored. These are owner-supplied historical checks; they do not imply that
-the Stage 3 importer has run.
+## Evidence ledger
 
-### Stage 1 — raw OpenLigaDB retrieval
+### Stage 0 - owner-supplied evidence
 
-Implemented and manually verified from owner-supplied evidence. Responses are
-preserved byte-for-byte with metadata, timestamp/hash-based directories, and
-immutable no-overwrite behavior. Matchday 3 and 4 captures are retained under
-`data/raw/`, which is Git-ignored.
+On 2026-11-01 and 2026-11-02, the owner reported:
 
-The source is subject to OpenLigaDB’s 60-requests-per-minute limit. This
-project must not poll aggressively; Stage 1 deliberately has no scheduler or
-repeated polling loop.
+- SQL Server `CANVASIT`, Standard Developer Edition (64-bit), version `17.0.1000.7`;
+- database `SportsFixturesTracker` and runtime login `sports_tracker_app`;
+- WSL TCP connectivity to the then-current Windows host address on port 1433;
+- ODBC Driver 18 and `sqlcmd` authentication;
+- Python 3.14.4 project virtual environment and pyodbc 5.3.0;
+- successful manual Python and permanent database-check connections;
+- editable installation, Ruff lint, Ruff formatting check, and five passing tests;
+- `.env` ignored by Git.
 
-### Stage 2 — SQL Server schema
+The host address can change after WSL or network restart. No password is recorded.
 
-The 12-table SQL Server schema is deployed according to the project owner’s
-report. The schema source remains `sql/001_initial_schema.sql`. The importer
-uses the existing tables and constraints; it does not create or alter tables.
+### Stage 1 - owner-supplied source evidence
 
-### Stage 3 — snapshot ingestion and change tracking
-
-Code implemented in this handoff; execution remains **NOT RUN** pending manual
-verification by the project owner.
-
-Implemented scope:
-
-- Reads existing `response.json` and `metadata.json` files without contacting
-  OpenLigaDB.
-- Parses the observed OpenLigaDB objects into typed teams, fixtures, results,
-  and goals.
-- Validates competition identity, provider IDs, required relationships,
-  timezone-aware kickoff timestamps, explicit result types, score consistency,
-  and goal-team relationships.
-- Preserves unfinished future matches with no invented zero scores.
-- Uses the existing SQL Server schema and parameterized pyodbc statements.
-- Preserves snapshot provenance and import-run status.
-- Uses provider IDs and existing unique constraints for idempotent upserts.
-- Records field-level `match_changes` only when a distinct snapshot changes an
-  existing current value; unchanged replay does not create changes.
-- Advances the sync checkpoint only after the transactional data commit.
-- Rolls back transactional writes on failure and attempts to record a failed
-  import run for diagnosis and safe retry.
-- Provides `scripts/import_snapshot.py` with offline `--dry-run` support.
-
-The importer does not implement scheduling, retries against the live provider,
-SQL loading for any other provider, API endpoints, UI behavior, or knockout
-expansion logic.
-
-## Verified source evidence available to the owner
-
-The owner supplied the following Stage 1 evidence for the saved responses:
-
-- Matchday 3: 18 matches, all completed, all with results, 18 unique provider
-  match IDs, 76,432 bytes, SHA-256
+- Matchday 3: 18 completed matches, 18 unique provider match IDs, 36 typed result
+  records in later dry-run/import evidence, 76,432 response bytes, SHA-256
   `88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348`.
-- Two Matchday 3 snapshots were captured at 09:47 and 10:24 UTC on
-  2026-11-02, with identical content hashes.
-- Matchday 4: 18 matches, all unfinished, all with empty `matchResults`, 18
-  unique provider match IDs, 53,969 bytes, SHA-256
+- Two Matchday 3 captures at 09:47 and 10:24 UTC on 2026-11-02 have identical
+  content hashes and distinct immutable provenance directories.
+- Matchday 4: 18 unfinished matches, 18 unique provider match IDs, empty result
+  arrays, 53,969 response bytes, SHA-256
   `a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245`.
-- There are 36 unique provider match IDs across the two matchdays.
-- Saved results include `HalfTime` and `After90Minutes` result types. The
-  parser does not treat a half-time score as a final score.
+- 36 unique provider match IDs exist across the two matchdays.
+- Saved completed records include explicit `HalfTime` and `After90Minutes` results.
+- The owner previously reported 15 Stage 1 tests passing in 0.50 seconds.
 
-These are source-capture facts, not evidence that Stage 3 SQL import has run.
-The importer and test suite are **NOT RUN** in this handoff.
+OpenLigaDB documents a 60-requests-per-minute limit. The implementation uses
+one-shot work and bounded retries; aggressive polling is prohibited.
 
-## Stage 3 manual evidence plan
+### Stage 2 and import recovery - owner-supplied evidence
 
-Run the offline dry run first, then the unit tests and static checks, then the
-SQL Server import in a controlled database. The expected sequence and SQL
-queries are maintained in `docs/MANUAL_RUNBOOK.md`.
+The owner reports that the 12-table schema from `sql/001_initial_schema.sql` is
+deployed. The source uses `source_snapshots.local_directory nvarchar(750)` so its
+nonclustered unique key remains under SQL Server's 1,700-byte key limit.
 
-Minimum acceptance evidence:
+Initial import failures exposed three concrete defects that were repaired before the
+first success:
 
-1. Dry runs validate Matchday 3 as 18 matches, 36 results, and the observed
-   goals; Matchday 4 as 18 matches with no results or fabricated scores.
-2. The first SQL import succeeds and creates one baseline for each fixture.
-3. Replaying the same directory leaves match, result, goal, and change counts
-   unchanged and creates no new field-level changes.
-4. An isolated updated-score fixture creates the intended field-level change
-   once, and replaying it does not create another one.
-5. A controlled SQL failure rolls back fixture, result, goal, change, and
-   checkpoint writes while leaving a useful failed import run when feasible.
+1. pyodbc identity batches could expose intermediate non-row result sets; the store
+   now advances to the active identity result set before `fetchone()`;
+2. a failed import needed a confirmed primary rollback before writing separate
+   failure provenance;
+3. OpenLigaDB can provide embedded Base64 team icons; these are omitted from the
+   nullable URL column with content-free warnings.
 
-## Engineering evaluation plan
+The owner backed up and reset the dedicated development database with the guarded
+manual recovery script. The first successful Matchday 3 baseline was then reported:
 
-All metrics below are planned evaluations, not completed results:
+- import run ID `3`;
+- source snapshot ID `8`;
+- 18 inserted completed matches;
+- 36 result rows;
+- 74 goals;
+- four safe embedded-icon warnings.
 
-- **Correctness:** valid source rows imported divided by valid rows in the
-  sanitized fixture and saved snapshots; separately report rejected records and
-  validation issue codes.
-- **Duplication rate:** additional matches, results, goals, or changes after a
-  byte-identical replay divided by the initial counts; target is zero.
-- **Change-detection accuracy:** true positives, false positives, and false
-  negatives on controlled before/after fixtures, with field-level precision and
-  recall reported separately for fixture, result, and goal changes.
-- **Transaction rollback:** verify that a forced failure leaves no partial
-  transactional rows and that a retry succeeds without duplicate history.
-- **Incremental request efficiency:** later live-source work should request
-  only the configured matchdays/checkpoint range and respect the 60 RPM limit;
-  it is not implemented in Stage 3.
-- **Snapshot replay:** import a saved response repeatedly and compare all
-  affected table counts, current values, checksums, and change rows.
-- **Latency:** record dry-run parsing time and SQL import wall-clock time for
-  each snapshot, including row counts and environment details. No latency claim
-  is made before measurement.
+The latest owner-supplied offline baseline before this audit was 56 passing non-SQL
+tests. It does not verify the audit edits below.
 
-## Current handoff
+### 2026-11-06 release-verification follow-up
 
-Changed for Stage 3: typed offline ingestion, importer CLI, sanitized tests,
-and this documentation. No project commands, tests, SQL, live imports, API
-requests, or Git operations were executed for this handoff. The next step is
-the manual runbook sequence, stopping at the first failed prerequisite.
+The owner subsequently reported that the database connection and SQL Server
+integration test succeeded. The non-SQL suite reported 81 passing tests and one
+failure in `test_sync_cli_returns_nonzero_after_partial_failure`.
+
+Static inspection identified configuration-name drift in
+`scripts/sync_openligadb.py`: `SyncSettings` exposes
+`backoff_initial_seconds` and `backoff_max_seconds`, while the CLI attempted to
+read `initial_backoff_seconds` and `max_backoff_seconds`. The first missing
+attribute raised before `sync_run_started` could be logged, which explains the
+test's empty event list. The CLI now maps the validated settings to the
+corresponding `RetryPolicy` fields, and the regression test captures and verifies
+that policy before asserting both lifecycle events and the non-zero partial-failure
+exit. These corrections are NOT RUN pending owner verification.
+
+## Release-readiness implementation audit
+
+### Ingestion and configuration
+
+- Source timeout and retry backoff values must be positive and finite.
+- Existing safe HTTP(S) team icons are preserved when later source icon data is
+  embedded, invalid, or too long.
+- Provider identity, baseline semantics, nullable future scores, explicit result
+  types, transactional rollback, separate failure provenance, and checkpoint
+  consistency remain unchanged.
+- Missing child rows are not interpreted as deletions; that policy remains deferred.
+
+### Synchronization and scheduling
+
+- All sync captures use the canonical Stage 1 writer and directory convention.
+- The parser receives validated OpenLigaDB settings.
+- SQL checkpoint lookup uses deployed `provider_shortcut` and `season_start_year`
+  columns.
+- Reliable non-newer signals skip; unsupported, empty, malformed, failed, or
+  timezone-naive signals force a full fetch.
+- A matchday failure does not block later matchdays; any partial-failure pass exits
+  non-zero.
+- Duplicate matchday arguments are rejected. Structured start/completion events are
+  logged under ignored `data/runtime/`.
+- The shell wrapper remains a one-shot `.venv` entry point; no task was activated.
+
+### FastAPI and dashboard
+
+- Repository SQL now matches deployed competition, season, match, result, goal,
+  import, validation, checkpoint, and note columns.
+- DML result-set handling and note transaction commit/rollback are explicit.
+- API models retain nullable result/goal scores and expose matchday summaries,
+  expanded import status, synchronization checkpoints, and non-secret service status.
+- Unexpected repository errors return generic HTTP 500 content and log only the
+  exception type.
+- The dashboard discovers competition seasons/matchdays, filters current fixtures,
+  shows typed detail and changes, displays import/validation/checkpoint state, and
+  supports optional token-gated local note create/edit/archive.
+- Provider text uses `textContent`; the note token is not stored in browser storage.
+
+### Security and release artifacts
+
+- `.env` and `.env.*` remain ignored while `.env.example` remains trackable.
+- Raw snapshots, runtime logs/locks, build artifacts, virtual environments, local SQL
+  backup/data files, and `data/backups/` are ignored.
+- No raw bytes, deployed SQL data, `.env`, password, token, or secret was modified.
+- No public bind, authentication expansion, deployment, scheduler activation, commit,
+  or push was performed.
+
+## Files changed in the 2026-11-06 audit
+
+- `.gitignore`
+- `README.md`
+- `src/sports_tracker/config.py`
+- `src/sports_tracker/ingestion.py`
+- `src/sports_tracker/synchronization.py`
+- `src/sports_tracker/api/models.py`
+- `src/sports_tracker/api/repository.py`
+- `src/sports_tracker/api/app.py`
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `scripts/import_snapshot.py`
+- `scripts/sync_openligadb.py`
+- `tests/test_api.py`
+- `tests/test_api_repository.py` (new)
+- `tests/test_config.py`
+- `tests/test_import_snapshot_cli.py` (new)
+- `tests/test_sql_diagnostics.py`
+- `tests/test_sync_cli.py` (new)
+- `tests/test_synchronization.py`
+- `docs/ARCHITECTURE.md`
+- `docs/API.md`
+- `docs/TESTING.md`
+- `docs/EVALUATION.md`
+- `docs/DEPLOYMENT_LOCAL.md`
+- `docs/MANUAL_RUNBOOK.md`
+- `docs/SOURCE_NOTES.md`
+- `docs/COMMIT_PLAN.md`
+- `docs/BUILD_PLAN.md`
+
+## Acceptance gates
+
+Run each gate in order and do not infer later success from an earlier gate:
+
+1. editable installation and Ruff lint/format check;
+2. offline tests excluding `sqlserver`;
+3. immutable snapshot evaluation/dry run and hash confirmation;
+4. read-only SQL connectivity/schema check;
+5. exact Matchday 3 replay with unchanged domain/change counts and stable checkpoint
+   snapshot identity (the successful run pointer may advance);
+6. Matchday 4 import with 36 total unique matches and no future score rows;
+7. real API and browser checks, including default-disabled notes;
+8. one live bounded sync pass and log/checkpoint review;
+9. one manual wrapper run, then optional Task Scheduler activation;
+10. final Git ignore, diff, staged-content, commit, and push review.
+
+Exact commands, SQL, expected outputs, stop conditions, and the Task Scheduler handoff
+are in `docs/MANUAL_RUNBOOK.md`.
+
+## Current blocker and next manual step
+
+Verification of the synchronization CLI correction is the current blocker. Where:
+WSL Bash. Working directory: `/mnt/f/sports-fixtures-change-tracker`.
+
+```bash
+source .venv/bin/activate
+python -m pytest \
+  tests/test_sync_cli.py::test_sync_cli_returns_nonzero_after_partial_failure -q
+ruff check .
+ruff format --check .
+python -m pytest -q -m "not sqlserver"
+```
+
+Expected: the focused regression test passes, both Ruff commands exit zero, and the
+complete selected offline suite has no failures. Stop at the first failure and
+return the complete non-secret diagnostic. Do not run a live synchronization pass
+until this gate passes.
+
+## Remaining limitations
+
+- Exact replay, Matchday 4 SQL import, and current SQL repository queries are not yet
+  manually verified.
+- No controlled mutation/rollback test has been run against a separate SQL Server
+  test database.
+- Omission/retraction semantics, knockout-specific shapes, penalties/extra time, and
+  season transitions need additional source evidence.
+- Last-change skip correctness requires empirical comparison with later preserved
+  full responses.
+- The API is local-only and uses a single note-write token; it is not a public or
+  multi-user security model.
+- No benchmark, screenshot, scheduled run, commit, or push is claimed.

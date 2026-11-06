@@ -1,18 +1,43 @@
 # Proposed commit structure
 
-No commit or Git command was performed. After every relevant manual gate passes,
-the user can review and create small commits in this order:
+No Git command was performed during the release-readiness audit. Commit only after
+the latest static checks, offline tests, SQL replay/import checks, API/browser review,
+and documentation evidence are complete.
 
-1. **Repair Stage 3 import and rollback tests** — importer bug fix, Ruff/format
-   repairs, stronger idempotency/change/rollback tests.
-2. **Add bounded synchronization and recovery tooling** — configuration, retry and
-   last-change client support, lock/log/checkpoint coordinator, one-shot scripts.
-3. **Add local FastAPI query service** — models, parameterized repository, security
-   defaults, API tests.
-4. **Add accessible local dashboard** — static HTML/CSS/JavaScript assets.
-5. **Add evaluation, integration gates, and handoff documentation** — tests,
-   evaluation helper, runbooks, deployment/scheduling proposal.
+If the working tree still supports clean separation, review these groups:
 
-Do not include `.env`, `data/raw/`, `data/runtime/`, logs, lock files, local tokens,
-or generated caches. If a gate fails, fix and repeat that gate before combining it
-with later-stage work.
+1. **Harden ingestion and synchronization** - configuration bounds, safe icon
+   preservation, canonical snapshot capture, checkpoint lookup, partial-failure
+   behavior, CLI diagnostics, and regressions.
+2. **Align and complete the local API** - deployed-schema query fixes, nullable
+   models, status/matchday/checkpoint routes, generic errors, note transactions, and
+   repository/API tests.
+3. **Complete the dashboard** - dynamic filters, fixture detail, operations status,
+   optional local notes, accessibility, and responsive states.
+4. **Finalize security and documentation** - ignore rules, architecture, runbook,
+   testing/evaluation, local scheduling, and evidence updates.
+
+If earlier work is already interdependent, one carefully reviewed implementation
+commit is safer than artificial history surgery. Do not rewrite history or discard
+unrelated user changes merely to match this proposal.
+
+Before every commit:
+
+```bash
+git status --short
+git diff --check
+git diff
+git ls-files .env data/raw data/runtime data/backups
+```
+
+After staging reviewed files:
+
+```bash
+git diff --cached --check
+git diff --cached
+```
+
+Do not include `.env` variants other than `.env.example`, raw snapshots, runtime
+logs/locks, local database backups/data files, tokens, generated caches, virtual
+environments, or unrelated work. The exact final command sequence and stop conditions
+are in `docs/MANUAL_RUNBOOK.md`.

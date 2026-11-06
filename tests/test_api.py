@@ -37,6 +37,20 @@ class FakeRepository:
             }
         ]
 
+    def matchdays(self, competition_season_id: int | None) -> list[dict[str, Any]]:
+        assert competition_season_id in {None, 1}
+        return [
+            {
+                "competition_season_id": 1,
+                "matchday_number": 3,
+                "match_count": 18,
+                "finished_count": 18,
+                "unfinished_count": 0,
+                "first_kickoff_utc": datetime(2026, 10, 20, 16, 45, tzinfo=UTC),
+                "last_kickoff_utc": datetime(2026, 10, 21, 19, 0, tzinfo=UTC),
+            }
+        ]
+
     def matches(self, **filters: Any) -> tuple[list[dict[str, Any]], int]:
         self.last_filters = filters
         return [self._match()], 1
@@ -75,6 +89,20 @@ class FakeRepository:
 
     def changes(self, match_id: int) -> list[dict[str, Any]]:
         return []
+
+    def sync_checkpoints(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+        return [
+            {
+                "sync_checkpoint_id": 1,
+                "provider": "OpenLigaDB",
+                "scope_key": "OpenLigaDB:ucl:2026:matchday:3",
+                "matchday_number": 3,
+                "last_source_update_utc": None,
+                "last_processed_at_utc": datetime(2026, 11, 3, tzinfo=UTC),
+                "last_successful_snapshot_id": 8,
+                "last_successful_import_run_id": 3,
+            }
+        ], 1
 
     def import_runs(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
         return [], 0
@@ -130,6 +158,24 @@ def test_match_filters_are_validated_and_forwarded() -> None:
     assert repository.last_filters["search"] == "Alpha"
 
 
+def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
+    client = TestClient(create_app(FakeRepository(), _settings(writes=True)))
+
+    status_response = client.get("/api/status")
+    matchdays_response = client.get("/api/matchdays?competition_season_id=1")
+    checkpoints_response = client.get("/api/sync-checkpoints")
+
+    assert status_response.status_code == 200
+    assert status_response.json() == {
+        "status": "ok",
+        "local_only": False,
+        "note_writes_enabled": True,
+    }
+    assert "token" not in status_response.text.lower()
+    assert matchdays_response.json()[0]["match_count"] == 18
+    assert checkpoints_response.json()[0]["last_successful_import_run_id"] == 3
+
+
 def test_match_detail_preserves_typed_results() -> None:
     client = TestClient(create_app(FakeRepository(), _settings()))
 
@@ -139,6 +185,34 @@ def test_match_detail_preserves_typed_results() -> None:
     result = response.json()["results"][0]
     assert result["result_type"] == "After90Minutes"
     assert result["home_score"] == 2
+
+
+def test_match_detail_accepts_genuinely_missing_result_and_goal_scores() -> None:
+    repository = FakeRepository()
+    original_match = repository.match
+
+    def nullable_match(match_id: int) -> dict[str, Any] | None:
+        record = original_match(match_id)
+        if record is None:
+            return None
+        record["results"][0]["home_score"] = None
+        record["results"][0]["away_score"] = None
+        record["goals"] = [
+            {
+                "provider_goal_id": 99,
+                "score_home": None,
+                "score_away": None,
+                "minute": None,
+            }
+        ]
+        return record
+
+    repository.match = nullable_match  # type: ignore[method-assign]
+    response = TestClient(create_app(repository, _settings())).get("/api/matches/10")
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["home_score"] is None
+    assert response.json()["goals"][0]["score_home"] is None
 
 
 def test_missing_match_is_404() -> None:
@@ -174,3 +248,42 @@ def test_note_write_requires_correct_token() -> None:
     assert rejected.status_code == 403
     assert accepted.status_code == 201
     assert accepted.json()["note_text"] == "Review lineup"
+
+
+def test_note_update_and_archive_require_token_and_preserve_soft_delete() -> None:
+    repository = FakeRepository()
+    client = TestClient(create_app(repository, _settings(writes=True)))
+    headers = {"X-Notes-Token": "a-secure-local-token"}
+
+    updated = client.put(
+        "/api/notes/1",
+        json={"note_text": "Updated note"},
+        headers=headers,
+    )
+    archived = client.delete("/api/notes/1", headers=headers)
+
+    assert updated.status_code == 200
+    assert updated.json()["note_text"] == "Updated note"
+    assert archived.status_code == 204
+    assert repository.note["is_archived"] is True
+    assert client.get("/api/matches/10/notes").json() == []
+
+
+def test_unhandled_repository_error_returns_generic_response() -> None:
+    repository = FakeRepository()
+
+    def fail(**filters: Any):
+        del filters
+        raise RuntimeError("internal SQL detail; PWD=not-a-real-secret")
+
+    repository.matches = fail  # type: ignore[method-assign]
+    client = TestClient(
+        create_app(repository, _settings()),
+        raise_server_exceptions=False,
+    )
+
+    response = client.get("/api/matches")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "The request could not be completed."}
+    assert "not-a-real-secret" not in response.text

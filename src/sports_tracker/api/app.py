@@ -2,6 +2,7 @@
 
 import hmac
 import ipaddress
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -15,7 +16,7 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from sports_tracker.api.models import (
@@ -24,15 +25,20 @@ from sports_tracker.api.models import (
     ImportRun,
     MatchChange,
     MatchDetail,
+    MatchdaySummary,
     MatchPage,
     Note,
     NoteCreate,
     NoteUpdate,
+    ServiceStatus,
+    SyncCheckpoint,
     ValidationIssue,
 )
 from sports_tracker.api.repository import Repository, SQLServerRepository
 from sports_tracker.config import ApplicationSettings, load_application_settings
 from sports_tracker.runtime import open_sql_server_connection
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _is_loopback(host: str | None) -> bool:
@@ -59,6 +65,14 @@ def create_app(
     )
     app.state.repository = repo
     app.state.settings = app_settings
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(_request: Request, exc: Exception) -> JSONResponse:
+        _LOGGER.error("Unhandled API error (%s)", type(exc).__name__)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "The request could not be completed."},
+        )
 
     @app.middleware("http")
     async def local_only(request: Request, call_next):
@@ -97,9 +111,24 @@ def create_app(
             raise HTTPException(status_code=503, detail="Database unavailable") from exc
         return Health(status="ok", database="available")
 
+    @app.get("/api/status", response_model=ServiceStatus)
+    def service_status() -> ServiceStatus:
+        return ServiceStatus(
+            status="ok",
+            local_only=app_settings.local_only,
+            note_writes_enabled=app_settings.allow_note_writes,
+        )
+
     @app.get("/api/competitions", response_model=list[Competition])
     def competitions(repository: RepositoryDependency):
         return repository.competitions()
+
+    @app.get("/api/matchdays", response_model=list[MatchdaySummary])
+    def matchdays(
+        repository: RepositoryDependency,
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+    ):
+        return repository.matchdays(competition_season_id)
 
     @app.get("/api/matches", response_model=MatchPage)
     def matches(
@@ -131,6 +160,15 @@ def create_app(
     @app.get("/api/matches/{match_id}/changes", response_model=list[MatchChange])
     def changes(match_id: int, repository: RepositoryDependency):
         return repository.changes(match_id)
+
+    @app.get("/api/sync-checkpoints", response_model=list[SyncCheckpoint])
+    def sync_checkpoints(
+        repository: RepositoryDependency,
+        limit: Limit = 50,
+        offset: Offset = 0,
+    ):
+        items, _ = repository.sync_checkpoints(limit, offset)
+        return items
 
     @app.get("/api/import-runs", response_model=list[ImportRun])
     def import_runs(

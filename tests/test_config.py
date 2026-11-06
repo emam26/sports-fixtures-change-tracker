@@ -8,6 +8,7 @@ from sports_tracker.config import (
     build_connection_string,
     load_database_settings,
     load_openligadb_settings,
+    load_sync_settings,
 )
 
 
@@ -111,3 +112,39 @@ def test_load_openligadb_settings_from_environment(tmp_path: Path) -> None:
     assert settings.expected_league_id == 4946
     assert settings.timeout_seconds == 10.0
     assert settings.raw_snapshot_directory == Path("data/raw")
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_openligadb_timeout_must_be_finite(tmp_path: Path, value: str) -> None:
+    values = {
+        "OPENLIGADB_BASE_URL": "https://api.openligadb.de",
+        "OPENLIGADB_SHORTCUT": "ucl",
+        "OPENLIGADB_SEASON": "2026",
+        "OPENLIGADB_EXPECTED_LEAGUE_ID": "4946",
+        "OPENLIGADB_TIMEOUT_SECONDS": value,
+        "RAW_SNAPSHOT_DIRECTORY": "data/raw",
+    }
+
+    with pytest.raises(ConfigurationError, match="OPENLIGADB_TIMEOUT_SECONDS"):
+        load_openligadb_settings(
+            dotenv_path=tmp_path / "missing.env",
+            environ=values,
+        )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["OPENLIGADB_BACKOFF_INITIAL_SECONDS", "OPENLIGADB_BACKOFF_MAX_SECONDS"],
+)
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_sync_backoff_must_be_finite(tmp_path: Path, key: str, value: str) -> None:
+    values = {
+        "OPENLIGADB_MATCHDAYS": "3,4",
+        key: value,
+    }
+
+    with pytest.raises(ConfigurationError, match=key):
+        load_sync_settings(
+            dotenv_path=tmp_path / "missing.env",
+            environ=values,
+        )

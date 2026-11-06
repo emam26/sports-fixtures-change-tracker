@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from sports_tracker.config import (
     ConfigurationError,
@@ -40,24 +39,24 @@ def main() -> int:
         matchdays = tuple(args.matchday) if args.matchday else sync.matchdays
         if any(matchday < 1 for matchday in matchdays):
             raise ConfigurationError("Matchdays must be positive integers")
+        if len(set(matchdays)) != len(matchdays):
+            raise ConfigurationError("Matchdays must not contain duplicates")
         logger = SafeJsonLogger(sync.log_directory)
         client = OpenLigaDBClient(
             source,
             retry_policy=RetryPolicy(
                 max_retries=sync.max_retries,
-                initial_backoff_seconds=sync.initial_backoff_seconds,
-                max_backoff_seconds=sync.max_backoff_seconds,
+                initial_backoff_seconds=sync.backoff_initial_seconds,
+                max_backoff_seconds=sync.backoff_max_seconds,
             ),
         )
         coordinator = SyncCoordinator(
             client=client,
             connection_factory=open_sql_server_connection,
-            raw_directory=Path(source.raw_snapshot_directory),
-            shortcut=source.shortcut,
-            season=source.season,
             logger=logger,
         )
         with RunLock(sync.lock_file):
+            logger.write("sync_run_started", matchdays=matchdays)
             outcomes = coordinator.synchronize(matchdays)
     except SyncAlreadyRunningError as exc:
         print(f"Synchronization not started: {exc}")
@@ -73,7 +72,22 @@ def main() -> int:
         detail = f"matchday {outcome.matchday}: {outcome.status}"
         if outcome.snapshot_sha256:
             detail += f" ({outcome.snapshot_sha256})"
+        if outcome.snapshot_directory:
+            detail += f" snapshot={outcome.snapshot_directory}"
         print(detail)
+    failed = sum(outcome.status == "failed" for outcome in outcomes)
+    try:
+        logger.write(
+            "sync_run_completed",
+            matchday_count=len(outcomes),
+            failed_matchdays=failed,
+        )
+    except OSError:
+        print("Synchronization outcomes were produced, but the completion log failed.")
+        return 1
+    if failed:
+        print(f"Synchronization pass completed with {failed} failed matchday(s).")
+        return 1
     print("Synchronization pass completed.")
     return 0
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import socket
@@ -13,13 +12,21 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from sports_tracker.config import OpenLigaDBSettings
 from sports_tracker.ingestion import (
     SnapshotImportProcessor,
     SQLServerImportStore,
     load_snapshot,
 )
-from sports_tracker.openligadb import LastChangeSignal, OpenLigaDBClient
+from sports_tracker.openligadb import (
+    LastChangeSignal,
+    OpenLigaDBClient,
+    OpenLigaDBError,
+    OpenLigaDBResponse,
+    build_last_change_url,
+)
 from sports_tracker.runtime import ConnectionFactory
+from sports_tracker.snapshots import save_raw_snapshot
 
 
 class SyncError(RuntimeError):
@@ -150,7 +157,7 @@ class SQLCheckpointReader:
         *,
         provider: str,
         shortcut: str,
-        season: str,
+        season: int,
         matchday: int,
     ) -> datetime | None:
         with closing(self._connection_factory()) as connection:
@@ -164,8 +171,8 @@ class SQLCheckpointReader:
                 INNER JOIN dbo.competitions AS c
                     ON c.competition_id = cs.competition_id
                 WHERE sc.provider = ?
-                  AND c.shortcut = ?
-                  AND cs.season = ?
+                  AND c.provider_shortcut = ?
+                  AND cs.season_start_year = ?
                   AND sc.matchday_number = ?;
                 """,
                 (provider, shortcut, season, matchday),
@@ -179,80 +186,16 @@ class SQLCheckpointReader:
             return value
 
 
-def _response_body(response: object) -> bytes:
-    byte_fields = (
-        "body",
-        "content",
-        "response_bytes",
-        "raw_bytes",
-        "content_bytes",
-    )
-    for name in byte_fields:
-        value = getattr(response, name, None)
-        if isinstance(value, bytes):
-            return value
-    raise SyncError("OpenLigaDB response did not expose raw response bytes")
-
-
-def _response_value(response: object, *names: str, default: object = None) -> object:
-    for name in names:
-        value = getattr(response, name, None)
-        if value is not None:
-            return value
-    return default
-
-
 def preserve_sync_response(
-    response: object,
+    response: OpenLigaDBResponse,
     *,
-    root: Path,
-    shortcut: str,
-    season: str,
+    settings: OpenLigaDBSettings,
     matchday: int,
 ) -> tuple[Path, str]:
-    """Preserve a successful response using the Stage 1 immutable layout."""
-    body = _response_body(response)
-    digest = hashlib.sha256(body).hexdigest()
-    retrieved = _response_value(response, "retrieved_at_utc", "retrieval_utc")
-    if not isinstance(retrieved, datetime):
-        retrieved = datetime.now(UTC)
-    if retrieved.tzinfo is None:
-        retrieved = retrieved.replace(tzinfo=UTC)
-    timestamp = retrieved.astimezone(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    directory = root / "openligadb" / shortcut / season / str(matchday)
-    destination = directory / f"{timestamp}_{digest[:16]}"
-    directory.mkdir(parents=True, exist_ok=True)
-    try:
-        destination.mkdir()
-    except FileExistsError as exc:
-        raise SyncError(f"Snapshot already exists: {destination}") from exc
-    status_code = int(_response_value(response, "status_code", "http_status", default=200))
-    content_type = str(_response_value(response, "content_type", default="application/json"))
-    url = str(_response_value(response, "url", "request_url", default=""))
-    metadata = {
-        "provider": "OpenLigaDB",
-        "url": url,
-        "shortcut": shortcut,
-        "season": season,
-        "matchday": matchday,
-        "retrieved_at_utc": retrieved.astimezone(UTC).isoformat(),
-        "http_status": status_code,
-        "content_type": content_type,
-        "byte_count": len(body),
-        "sha256": digest,
-    }
-    try:
-        (destination / "response.json").write_bytes(body)
-        (destination / "metadata.json").write_text(
-            json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-    except OSError:
-        for child in destination.iterdir():
-            child.unlink()
-        destination.rmdir()
-        raise
-    return destination, digest
+    """Preserve a response through the single Stage 1 immutable snapshot writer."""
+
+    snapshot = save_raw_snapshot(response, settings, matchday)
+    return snapshot.directory, snapshot.sha256
 
 
 class SyncCoordinator:
@@ -263,16 +206,11 @@ class SyncCoordinator:
         *,
         client: OpenLigaDBClient,
         connection_factory: ConnectionFactory,
-        raw_directory: Path,
-        shortcut: str,
-        season: str,
         logger: Logger,
     ) -> None:
         self._client = client
         self._connection_factory = connection_factory
-        self._raw_directory = raw_directory
-        self._shortcut = shortcut
-        self._season = season
+        self._settings = client.settings
         self._logger = logger
         self._checkpoints = SQLCheckpointReader(connection_factory)
 
@@ -283,12 +221,31 @@ class SyncCoordinator:
             return True
         return signal.changed_at_utc > checkpoint
 
+    def _last_change_signal(self, matchday: int) -> LastChangeSignal:
+        try:
+            return self._client.fetch_last_change(matchday)
+        except OpenLigaDBError as exc:
+            self._logger.write(
+                "sync_signal_unavailable",
+                matchday=matchday,
+                error_type=type(exc).__name__,
+                action="full_fetch_required",
+            )
+            return LastChangeSignal(
+                url=build_last_change_url(self._settings, matchday),
+                status_code=0,
+                raw_value=None,
+                changed_at_utc=None,
+                reliable=False,
+                reason="last-change check failed; full retrieval required",
+            )
+
     def synchronize_matchday(self, matchday: int) -> SyncOutcome:
-        signal = self._client.fetch_last_change(matchday)
+        signal = self._last_change_signal(matchday)
         checkpoint = self._checkpoints.last_source_update(
             provider="OpenLigaDB",
-            shortcut=self._shortcut,
-            season=self._season,
+            shortcut=self._settings.shortcut,
+            season=self._settings.season,
             matchday=matchday,
         )
         if not self._should_fetch(signal, checkpoint):
@@ -314,12 +271,10 @@ class SyncCoordinator:
         response = self._client.fetch_matchday(matchday)
         directory, digest = preserve_sync_response(
             response,
-            root=self._raw_directory,
-            shortcut=self._shortcut,
-            season=self._season,
+            settings=self._settings,
             matchday=matchday,
         )
-        parsed = load_snapshot(directory)
+        parsed = load_snapshot(directory, self._settings)
         parsed = replace(
             parsed,
             source_last_change_utc=(signal.changed_at_utc if signal.reliable else None),
@@ -365,5 +320,14 @@ class SyncCoordinator:
                     matchday=matchday,
                     error_type=type(exc).__name__,
                 )
-                raise
+                outcomes.append(
+                    SyncOutcome(
+                        matchday=matchday,
+                        status="failed",
+                        reason=(
+                            "Synchronization failed safely for this matchday; "
+                            "inspect the structured log."
+                        ),
+                    )
+                )
         return tuple(outcomes)

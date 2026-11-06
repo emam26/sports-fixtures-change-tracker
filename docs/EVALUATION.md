@@ -1,69 +1,117 @@
 # Engineering evaluation plan
 
-Status: planned; no Stage 3–10 evaluation below has been completed.
+The owner has verified one successful Matchday 3 baseline import. The comparative
+evaluations below remain planned and **NOT COMPLETED** unless explicitly identified
+as prior source evidence.
 
-## Correctness
+## Fixed source evidence
 
-For preserved Matchdays 3 and 4, compare parsed provider match IDs and selected
-fields against the saved response, then compare SQL current state against parsed
-records. Required known totals are 18 matches per matchday and 36 unique IDs across
-both. Matchday 3 has 18 completed matches with results. Matchday 4 has 18 unfinished
-matches with absent result arrays; their scores must remain `NULL`/absent.
+- Matchday 3: 18 completed matches, 36 result records, 74 goals in the successful
+  import, response SHA-256
+  `88d0c86d9fda325e1dd2f90cc1ef81eacafa3ef47df9e5d31335912519e1c348`.
+- Matchday 4: saved response has 18 unfinished matches and empty result arrays,
+  response SHA-256
+  `a6758a21588bd4d8634882b5909ed32d54f03b56a8a9dd1a4280155bd425f245`.
+- Two Matchday 3 captures have the same content hash but different retrieval times.
 
-Report field agreement as `matching evaluated fields / evaluated fields`. Include
-provider identity, teams, kickoff, finish state, each typed result, and each goal.
-Do not report 100% unless every selected field was actually compared.
+These values are acceptance inputs, not performance or idempotency results.
+
+## Parsing correctness
+
+Replay each immutable snapshot with `scripts/evaluate_snapshot.py` and the import
+CLI dry run. Compare parsed provider IDs and selected fields directly with saved
+metadata/response evidence, then compare imported SQL rows with the parsed records.
+
+Required fields include competition identity, team IDs, kickoff, finish state,
+every explicit result type/score, and every goal identity/cumulative score.
+
+```text
+field agreement = matching evaluated fields / all evaluated fields
+```
+
+Report the numerator and denominator. Do not state 100% unless every declared field
+was actually compared. Matchday 4 scores must remain absent/`NULL`.
 
 ## Idempotency and duplication
 
-Import one snapshot, replay it, then import the second same-hash Matchday 3 capture.
-Measure duplicate domain rows for matches, result identity, and goal identity.
+Record domain counts, import-run counts, snapshot counts, and change counts before
+and after:
 
-`duplication rate = unexpected duplicate rows / expected unique rows`
+1. exact replay of the already imported Matchday 3 directory;
+2. import of the second same-hash Matchday 3 capture;
+3. replay of the same Matchday 4 directory.
 
-Target: zero. Provenance/import observations are expected to differ from domain
-row counts and must not be mislabeled as duplicates.
+```text
+duplication rate = unexpected duplicate domain rows / expected unique domain rows
+```
+
+Target: zero for matches, result identity, and goal identity. Additional distinct
+snapshot/import-run provenance is expected and must not be mislabeled as a domain
+duplicate.
 
 ## Change-detection accuracy
 
-Use sanitized controlled fixtures to alter one field at a time: kickoff, location,
-finish state, `HalfTime`, `After90Minutes`, result description, and goal data.
-Compute precision and recall against the known injected changes. Include unchanged
-replay as a negative control and omission of a match as a non-deletion control.
-Target unit-fixture precision and recall: 1.0. These are simulated test changes and
-must never be described as naturally observed upstream changes.
+Use sanitized unit fixtures to alter one field at a time: kickoff, location, finish
+state, `HalfTime`, `After90Minutes`, result description, and goal data. Include exact
+replay as a negative control and omission as a non-deletion control.
 
-## Transaction recovery
+```text
+precision = true recorded changes / all recorded changes
+recall = true recorded changes / all injected changes
+```
 
-Inject failure during result persistence and again during checkpoint advancement.
-Verify current match/result/goal state, changes, and checkpoint equal the prior
-commit; verify a failed import record exists where designed; then retry the same
-snapshot and verify one successful transition. Repeat against a separate SQL Server
-test database before claiming database-level rollback behavior.
+Target for deterministic unit fixtures: 1.0 precision and 1.0 recall. These are
+synthetic controlled changes and must never be presented as naturally observed
+upstream events.
 
-## Incremental request efficiency
+## Transaction rollback and recovery
 
-For a scheduled observation window, record last-change checks, full matchday
-requests, skipped checks, retries, and failures from structured logs.
+Offline tests inject failures during result mutation and checkpoint advancement.
+They must show that teams/matches/results/goals/changes/checkpoints return to the
+prior commit, safe failed-run provenance remains where designed, and a retry can
+succeed.
 
-`full-fetch ratio = full matchday requests / last-change checks`
+Before making a database-level atomicity claim, repeat a controlled test against a
+separate disposable SQL Server test database. Record before/after checksums or row
+counts and transaction status. Never inject failure or delete data in the project
+database containing the verified Matchday 3 import.
 
-Lower is better only if correctness is retained. Audit a sample of skips against a
-later full fetch. Never optimize by exceeding OpenLigaDB's 60-request-per-minute
-limit or by trusting an ambiguous timestamp.
+## Request efficiency
 
-## Replay and latency
+For an explicitly scheduled observation window, count structured events:
 
-Replay each saved snapshot offline and verify deterministic parsed identities and
-hashes. Measure parse latency with `scripts/evaluate_snapshot.py`; separately time
-transactional import and API list/detail requests over repeated runs, reporting
-median, p95, sample count, machine context, and cold/warm distinction. The small
-initial dataset does not justify broad scalability claims.
+- last-change checks;
+- full matchday fetches;
+- reliable skips;
+- retry attempts;
+- matchday failures and partial-failure passes.
+
+```text
+full-fetch ratio = full matchday requests / last-change checks
+```
+
+Lower is useful only if correctness is retained. Audit a sample of reliable skips
+against a later manual full fetch. Unsupported, malformed, failed, or timezone-naive
+signals must not produce a skip. OpenLigaDB's 60 RPM limit is a hard ceiling, not an
+evaluation target.
+
+## Latency and throughput
+
+Measure parsing, SQL import, and API list/detail separately. Report median, p95,
+sample count, machine context, dataset size, and cold/warm conditions. Parsing can be
+measured with `scripts/evaluate_snapshot.py`; SQL and API timing must be measured by
+the owner during real manual runs.
+
+```text
+fixture throughput = successfully processed fixtures / import elapsed seconds
+```
+
+Do not infer scalability from two matchdays or from one timing sample. No benchmark
+number is currently claimed.
 
 ## Threats to validity
 
 Two matchdays do not cover knockout formats, postponements, penalties, extra time,
-provider deletions, or every goal correction. Mock-store tests cannot establish
-pyodbc/SQL Server transaction behavior. Last-change endpoint semantics require
-continued empirical auditing. Expansion to all 144 league-phase fixtures and later
-knockouts is gated on the evaluations above.
+provider deletions, every goal correction, or season transitions. Mock transports
+and in-memory stores cannot establish network or SQL Server guarantees. The provider
+last-change endpoint needs ongoing empirical comparison with preserved full responses.

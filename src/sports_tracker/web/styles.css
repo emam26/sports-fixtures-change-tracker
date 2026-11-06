@@ -29,7 +29,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -179,7 +180,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   min-height: 2.65rem;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--line);
@@ -190,6 +192,7 @@ select {
 
 input:focus,
 select:focus,
+textarea:focus,
 button:focus-visible {
   outline: 3px solid rgb(13 115 84 / 28%);
   outline-offset: 2px;
@@ -201,6 +204,12 @@ button:focus-visible {
   padding: 0.55rem 1rem;
   border-radius: 0.4rem;
   font-weight: 700;
+}
+
+.compact {
+  min-height: auto;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
 }
 
 .primary {
@@ -293,7 +302,7 @@ button:focus-visible {
 
 .operations-grid {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
 }
 
@@ -363,6 +372,37 @@ dialog::backdrop {
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
   margin-top: 1.5rem;
+}
+
+.record-list,
+.note-editor {
+  margin-bottom: 1.5rem;
+}
+
+.note-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.note-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.note-form textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
+.note-form .primary {
+  width: fit-content;
+}
+
+@media (max-width: 1000px) {
+  .operations-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {

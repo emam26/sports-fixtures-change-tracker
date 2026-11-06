@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections.abc import Mapping
@@ -221,7 +222,7 @@ def _optional_positive_float(
         value = float(str(raw_value).strip())
     except ValueError as exc:
         raise ConfigurationError(f"Setting {key} must be a number") from exc
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise ConfigurationError(f"Setting {key} must be greater than zero")
     return value
 
@@ -263,7 +264,7 @@ def load_openligadb_settings(
         timeout_seconds = float(timeout_text)
     except ValueError as exc:
         raise ConfigurationError("OPENLIGADB_TIMEOUT_SECONDS must be a number") from exc
-    if timeout_seconds <= 0:
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ConfigurationError("OPENLIGADB_TIMEOUT_SECONDS must be greater than zero")
 
     raw_directory = _required_value(values, "RAW_SNAPSHOT_DIRECTORY").strip()

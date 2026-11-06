@@ -1,5 +1,7 @@
 .venv/
 .env
+.env.*
+!.env.example
 **pycache**/
 *.py[cod]
 .pytest_cache/
@@ -12,3 +14,9 @@ htmlcov/
 build/
 dist/
 data/raw/
+data/runtime/
+data/backups/
+*.bak
+*.trn
+*.mdf
+*.ldf

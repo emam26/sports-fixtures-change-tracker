@@ -26,6 +26,16 @@ class Competition(ApiModel):
     provider_league_id: int
 
 
+class MatchdaySummary(ApiModel):
+    competition_season_id: int
+    matchday_number: int
+    match_count: int
+    finished_count: int
+    unfinished_count: int
+    first_kickoff_utc: datetime | None = None
+    last_kickoff_utc: datetime | None = None
+
+
 class MatchSummary(ApiModel):
     match_id: int
     provider_match_id: int
@@ -47,14 +57,14 @@ class MatchPage(Page):
 class Result(ApiModel):
     result_type: str
     result_name: str | None = None
-    home_score: int
-    away_score: int
+    home_score: int | None = None
+    away_score: int | None = None
 
 
 class Goal(ApiModel):
     provider_goal_id: int | None = None
-    score_home: int
-    score_away: int
+    score_home: int | None = None
+    score_away: int | None = None
     minute: int | None = None
     scorer_name: str | None = None
     is_penalty: bool | None = None
@@ -86,11 +96,16 @@ class ImportRun(ApiModel):
     started_at_utc: datetime
     completed_at_utc: datetime | None = None
     snapshot_sha256: str | None = None
+    matchday_number: int | None = None
+    is_replay: bool = False
     matches_seen: int | None = None
     matches_inserted: int | None = None
     matches_updated: int | None = None
+    matches_unchanged: int | None = None
+    matches_rejected: int | None = None
     results_seen: int | None = None
     validation_issue_count: int | None = None
+    failure_phase: str | None = None
     error_message: str | None = None
 
 
@@ -109,7 +124,7 @@ class Note(ApiModel):
     note_id: int
     match_id: int
     note_text: str
-    created_by: str
+    created_by: str | None = None
     is_archived: bool
     created_at_utc: datetime
     updated_at_utc: datetime
@@ -141,3 +156,20 @@ class NoteUpdate(ApiModel):
 class Health(ApiModel):
     status: str
     database: str
+
+
+class ServiceStatus(ApiModel):
+    status: str
+    local_only: bool
+    note_writes_enabled: bool
+
+
+class SyncCheckpoint(ApiModel):
+    sync_checkpoint_id: int
+    provider: str
+    scope_key: str
+    matchday_number: int | None = None
+    last_source_update_utc: datetime | None = None
+    last_processed_at_utc: datetime | None = None
+    last_successful_snapshot_id: int | None = None
+    last_successful_import_run_id: int | None = None

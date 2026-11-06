@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sports_tracker.ingestion import SQLServerImportStore, SQLServerOperationError
+from sports_tracker.ingestion import SQLServerImportStore, SQLServerOperationError, TeamData
 
 
 class _FailingCursor:
@@ -66,6 +66,38 @@ class _ProvenanceConnection:
 
     def rollback(self) -> None:
         self.rollback_calls += 1
+
+
+class _ExistingTeamCursor:
+    def __init__(self) -> None:
+        self.executions: list[tuple[str, tuple[object, ...]]] = []
+
+    def execute(
+        self,
+        statement: str,
+        parameters: tuple[object, ...],
+    ) -> _ExistingTeamCursor:
+        self.executions.append((statement, parameters))
+        return self
+
+    def fetchone(self) -> tuple[object, ...]:
+        return (
+            17,
+            "Existing FC",
+            "Existing",
+            "EFC",
+            None,
+            "https://images.example.test/existing.png",
+            None,
+        )
+
+
+class _ExistingTeamConnection:
+    def __init__(self) -> None:
+        self.cursor_instance = _ExistingTeamCursor()
+
+    def cursor(self) -> _ExistingTeamCursor:
+        return self.cursor_instance
 
 
 def test_sql_operation_diagnostic_names_operation_and_redacts_password() -> None:
@@ -143,3 +175,24 @@ def test_failed_run_provenance_rolls_back_its_own_partial_transaction(monkeypatc
 
     assert connection.rollback_calls == 1
     assert connection.commit_calls == 0
+
+
+def test_team_upsert_does_not_erase_existing_safe_icon_when_source_icon_is_omitted() -> None:
+    connection = _ExistingTeamConnection()
+    store = SQLServerImportStore(connection)
+    team = TeamData(
+        provider_team_id=123,
+        team_name="Renamed FC",
+        short_name="Renamed",
+        tla="RFC",
+        team_group_name=None,
+        team_icon_url=None,
+        wikidata_id=None,
+    )
+
+    team_id = store.upsert_team(team)
+
+    assert team_id == 17
+    update_parameters = connection.cursor_instance.executions[1][1]
+    assert update_parameters[4] == "https://images.example.test/existing.png"
+    assert update_parameters[-1] == 17

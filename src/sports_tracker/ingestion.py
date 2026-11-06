@@ -1747,7 +1747,11 @@ class SQLServerImportStore:
             team.wikidata_id,
         )
         if row is not None:
-            if tuple(row[1:]) != values:
+            # A rejected embedded/oversized icon is represented as None. Preserve a
+            # previously stored safe HTTP(S) URL instead of erasing it when later
+            # provider data contains an unusable image reference.
+            effective_values = (*values[:4], team.team_icon_url or row[5], values[5])
+            if tuple(row[1:]) != effective_values:
                 cursor.execute(
                     """
                     UPDATE dbo.teams
@@ -1755,7 +1759,7 @@ class SQLServerImportStore:
                         team_icon_url = ?, wikidata_id = ?, updated_at_utc = SYSUTCDATETIME()
                     WHERE team_id = ?
                     """,
-                    (*values, int(row[0])),
+                    (*effective_values, int(row[0])),
                 )
             return int(row[0])
         return self._insert_id(
