@@ -976,23 +976,6 @@ textarea {
   line-height: 1.4;
 }
 
-.site-footer {
-  padding: 1.5rem 0 3rem;
-  border-top: 1px solid var(--line);
-  color: var(--ink-subtle);
-  font-size: 0.82rem;
-  line-height: 1.5;
-}
-
-.site-footer .shell {
-  display: grid;
-  gap: 0.4rem;
-}
-
-.site-footer p {
-  margin-bottom: 0;
-}
-
 .noscript-message {
   position: fixed;
   right: 1rem;
