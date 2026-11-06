@@ -1,32 +1,104 @@
-const health = document.querySelector("#health");
-const fixtureList = document.querySelector("#fixture-list");
-const fixtureStatus = document.querySelector("#fixture-status");
-const filters = document.querySelector("#filters");
-const competitionSelect = document.querySelector("#competition");
-const matchdaySelect = document.querySelector("#matchday");
-const dialog = document.querySelector("#match-dialog");
-const matchDetail = document.querySelector("#match-detail");
-const emptyTemplate = document.querySelector("#empty-template");
-
-const applicationState = {
-  noteWritesEnabled: false,
+const ui = {
+  appAlert: document.querySelector("#app-alert"),
+  health: document.querySelector("#health"),
+  competitionContext: document.querySelector("#competition-context"),
+  overviewStatus: document.querySelector("#overview-status"),
+  latestSync: document.querySelector("#latest-sync"),
+  metricTotal: document.querySelector("#metric-total"),
+  metricFinished: document.querySelector("#metric-finished"),
+  metricUpcoming: document.querySelector("#metric-upcoming"),
+  metricGoals: document.querySelector("#metric-goals"),
+  metricChanges: document.querySelector("#metric-changes"),
+  metricChangesDetail: document.querySelector("#metric-changes-detail"),
+  filters: document.querySelector("#filters"),
+  competitionSelect: document.querySelector("#competition"),
+  matchdaySelect: document.querySelector("#matchday"),
+  finishedSelect: document.querySelector("#finished"),
+  sortSelect: document.querySelector("#fixture-sort"),
+  searchInput: document.querySelector("#search"),
+  fixtureStatus: document.querySelector("#fixture-status"),
+  fixtureList: document.querySelector("#fixture-list"),
+  changesStatus: document.querySelector("#changes-status"),
+  changeList: document.querySelector("#change-list"),
+  changePagination: document.querySelector("#change-pagination"),
+  changePageDescription: document.querySelector("#change-page-description"),
+  previousChangePage: document.querySelector("#change-page-previous"),
+  nextChangePage: document.querySelector("#change-page-next"),
+  operationsStatus: document.querySelector("#operations-status"),
+  importRuns: document.querySelector("#import-runs"),
+  checkpoints: document.querySelector("#sync-checkpoints"),
+  validationIssues: document.querySelector("#validation-issues"),
+  dialog: document.querySelector("#match-dialog"),
+  matchDetail: document.querySelector("#match-detail"),
 };
 
-function element(tag, className, text) {
+const state = {
+  competitions: [],
+  detailRequestId: 0,
+  changeOffset: 0,
+  changePageSize: 25,
+  changeRequestId: 0,
+  fixturePage: null,
+  fixtureRequestId: 0,
+  fixturesLoading: false,
+  matchdayRequestId: 0,
+  noteWritesEnabled: false,
+  operationsRequestId: 0,
+  overviewRequestId: 0,
+};
+
+const integerFormatter = new Intl.NumberFormat();
+
+class ApiRequestError extends Error {
+  constructor(message, status = null) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+function element(tag, { className = "", text, attributes = {} } = {}) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined && text !== null) node.textContent = text;
+  Object.entries(attributes).forEach(([name, value]) => {
+    node.setAttribute(name, String(value));
+  });
   return node;
 }
 
-function setState(node, message, className = "") {
-  node.textContent = message;
-  node.classList.remove("error", "ok");
-  if (className) node.classList.add(className);
+function setText(node, text) {
+  if (node) node.textContent = text;
 }
 
-function formatDate(value) {
-  if (!value) return "Time not supplied";
+function setStatus(node, message, tone = "") {
+  if (!node) return;
+  node.textContent = message;
+  node.dataset.tone = tone;
+}
+
+function setBusy(node, isBusy) {
+  if (node) node.setAttribute("aria-busy", String(isBusy));
+}
+
+function showAppAlert(message) {
+  if (!ui.appAlert) return;
+  ui.appAlert.hidden = false;
+  ui.appAlert.textContent = message;
+}
+
+function clearAppAlert() {
+  if (!ui.appAlert) return;
+  ui.appAlert.hidden = true;
+  ui.appAlert.textContent = "";
+}
+
+function formatCount(value) {
+  return integerFormatter.format(Number(value ?? 0));
+}
+
+function formatDate(value, fallback = "Not recorded") {
+  if (!value) return fallback;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Invalid source time";
   return new Intl.DateTimeFormat(undefined, {
@@ -35,159 +107,503 @@ function formatDate(value) {
   }).format(date);
 }
 
+function valueOrNotSupplied(value) {
+  if (value === null || value === undefined || value === "") return "Not supplied";
+  return String(value);
+}
+
+function scoreText(homeScore, awayScore) {
+  if (homeScore === null || homeScore === undefined) return "Not supplied";
+  if (awayScore === null || awayScore === undefined) return "Not supplied";
+  return `${homeScore}-${awayScore}`;
+}
+
+function compactHash(value) {
+  if (!value) return "Hash not recorded";
+  return value.length > 16 ? `${value.slice(0, 12)}...${value.slice(-4)}` : value;
+}
+
+function selectedCompetitionId() {
+  const value = ui.competitionSelect?.value;
+  return value ? Number(value) : null;
+}
+
+function selectedCompetition() {
+  const competitionId = selectedCompetitionId();
+  return state.competitions.find((item) => item.competition_season_id === competitionId) ?? null;
+}
+
+function apiPath(path, parameters = {}) {
+  const search = new URLSearchParams();
+  Object.entries(parameters).forEach(([key, value]) => {
+    if (value !== null && value !== undefined && value !== "") {
+      search.set(key, String(value));
+    }
+  });
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
+}
+
 async function request(path, options = {}) {
   const headers = { Accept: "application/json", ...options.headers };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, { ...options, headers });
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
+
+  let response;
+  try {
+    response = await fetch(path, { ...options, headers });
+  } catch {
+    throw new ApiRequestError("The local API could not be reached.");
+  }
+
   if (response.status === 204) return null;
-  return response.json();
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    if (response.ok) {
+      throw new ApiRequestError("The local API returned an unreadable response.", response.status);
+    }
+  }
+
+  if (!response.ok) {
+    throw new ApiRequestError(`The local API returned HTTP ${response.status}.`, response.status);
+  }
+  return payload;
 }
 
-async function checkHealth() {
+function contentState(title, detail, tone = "empty") {
+  const container = element("div", { className: `content-state ${tone}-state` });
+  container.append(element("strong", { text: title }), element("span", { text: detail }));
+  return container;
+}
+
+function renderListState(container, title, detail, tone = "empty") {
+  if (!container) return;
+  container.replaceChildren(contentState(title, detail, tone));
+  setBusy(container, false);
+}
+
+function statusClass(status) {
+  const normalized = String(status ?? "unknown").toLowerCase();
+  if (normalized === "succeeded" || normalized === "imported") return "is-success";
+  if (normalized === "failed") return "is-danger";
+  if (normalized === "skipped" || normalized === "started") return "is-neutral";
+  return "is-neutral";
+}
+
+function statusPill(text) {
+  return element("span", { className: `status-pill ${statusClass(text)}`, text: String(text) });
+}
+
+function sourcePill(match) {
+  return statusPill(match.is_finished ? "Finished" : "Upcoming");
+}
+
+function describeRequestFailure(subject, error) {
+  const suffix = error instanceof ApiRequestError && error.status ? ` (HTTP ${error.status})` : "";
+  return `${subject} could not be loaded${suffix}. Check the local API and database service.`;
+}
+
+async function loadHealth() {
+  setStatus(ui.health, "Checking availability...", "loading");
   try {
     await request("/health");
-    setState(health, "Database available", "ok");
-  } catch (error) {
-    setState(health, "Database unavailable", "error");
+    setStatus(ui.health, "Database available", "ok");
+  } catch {
+    setStatus(ui.health, "Database unavailable", "error");
+    showAppAlert("The database health check failed. The dashboard will show any data it can load.");
   }
 }
 
 async function loadServiceStatus() {
   try {
-    const status = await request("/api/status");
-    applicationState.noteWritesEnabled = status.note_writes_enabled;
-  } catch (error) {
-    applicationState.noteWritesEnabled = false;
+    const service = await request("/api/status");
+    state.noteWritesEnabled = Boolean(service.note_writes_enabled);
+  } catch {
+    state.noteWritesEnabled = false;
   }
 }
 
+function renderCompetitionContext() {
+  const competition = selectedCompetition();
+  if (competition) {
+    setText(ui.competitionContext, `${competition.name} / ${competition.season}`);
+    return;
+  }
+  setText(ui.competitionContext, "All loaded competition seasons");
+}
+
 async function loadCompetitions() {
+  const previous = ui.competitionSelect?.value ?? "";
+  if (ui.competitionSelect) ui.competitionSelect.disabled = true;
   try {
     const competitions = await request("/api/competitions");
-    competitionSelect.replaceChildren(new Option("All loaded", ""));
+    state.competitions = competitions;
+    ui.competitionSelect.replaceChildren(new Option("All loaded competition seasons", ""));
     competitions.forEach((competition) => {
-      const label = `${competition.name} ${competition.season}`;
-      competitionSelect.append(new Option(label, competition.competition_season_id));
+      const label = `${competition.name} / ${competition.season}`;
+      ui.competitionSelect.append(new Option(label, String(competition.competition_season_id)));
     });
-    if (competitions.length === 1) {
-      competitionSelect.value = String(competitions[0].competition_season_id);
+    const availableValues = new Set([...ui.competitionSelect.options].map((option) => option.value));
+    if (previous && availableValues.has(previous)) {
+      ui.competitionSelect.value = previous;
+    } else if (competitions.length === 1) {
+      ui.competitionSelect.value = String(competitions[0].competition_season_id);
     }
+    ui.competitionSelect.disabled = false;
+    renderCompetitionContext();
+    return true;
   } catch (error) {
-    competitionSelect.replaceChildren(new Option("Unavailable", ""));
-    competitionSelect.disabled = true;
-    setState(fixtureStatus, "Competition information could not be loaded.", "error");
+    state.competitions = [];
+    ui.competitionSelect.replaceChildren(new Option("Competition data unavailable", ""));
+    ui.competitionSelect.disabled = true;
+    renderCompetitionContext();
+    showAppAlert(describeRequestFailure("Competition data", error));
+    return false;
   }
 }
 
 async function loadMatchdays() {
-  const params = new URLSearchParams();
-  if (competitionSelect.value) {
-    params.set("competition_season_id", competitionSelect.value);
-  }
-  const query = params.toString();
-  const path = query ? `/api/matchdays?${query}` : "/api/matchdays";
+  const requestId = ++state.matchdayRequestId;
+  const previous = ui.matchdaySelect?.value ?? "";
+  ui.matchdaySelect.disabled = true;
   try {
-    const matchdays = await request(path);
-    const previous = matchdaySelect.value;
-    matchdaySelect.replaceChildren(new Option("All loaded", ""));
+    const matchdays = await request(
+      apiPath("/api/matchdays", { competition_season_id: selectedCompetitionId() }),
+    );
+    if (requestId !== state.matchdayRequestId) return false;
+    ui.matchdaySelect.replaceChildren(new Option("All loaded matchdays", ""));
     matchdays.forEach((matchday) => {
-      const label = `Matchday ${matchday.matchday_number} (${matchday.match_count})`;
-      matchdaySelect.append(new Option(label, matchday.matchday_number));
+      const completed = `${formatCount(matchday.finished_count)} finished`;
+      const label = `Matchday ${matchday.matchday_number} / ${formatCount(
+        matchday.match_count,
+      )} fixtures / ${completed}`;
+      ui.matchdaySelect.append(new Option(label, String(matchday.matchday_number)));
     });
-    if ([...matchdaySelect.options].some((option) => option.value === previous)) {
-      matchdaySelect.value = previous;
+    if ([...ui.matchdaySelect.options].some((option) => option.value === previous)) {
+      ui.matchdaySelect.value = previous;
     }
+    ui.matchdaySelect.disabled = false;
+    return true;
   } catch (error) {
-    matchdaySelect.replaceChildren(new Option("Unavailable", ""));
-    setState(fixtureStatus, "Matchday information could not be loaded.", "error");
+    if (requestId !== state.matchdayRequestId) return false;
+    ui.matchdaySelect.replaceChildren(new Option("Matchday data unavailable", ""));
+    ui.matchdaySelect.disabled = true;
+    setStatus(ui.fixtureStatus, describeRequestFailure("Matchday data", error), "error");
+    return false;
   }
 }
 
-function scoreText(match) {
-  if (match.home_score === null || match.away_score === null) return "Not supplied";
-  return `${match.home_score}\u2013${match.away_score}`;
+function renderSummary(summary) {
+  setText(ui.metricTotal, formatCount(summary.total_fixtures));
+  setText(ui.metricFinished, formatCount(summary.finished_fixtures));
+  setText(ui.metricUpcoming, formatCount(summary.upcoming_fixtures));
+  setText(ui.metricGoals, formatCount(summary.goals_recorded));
+  setText(ui.metricChanges, formatCount(summary.detected_changes));
+  if (summary.changed_fixtures === null || summary.changed_fixtures === undefined) {
+    setText(ui.metricChangesDetail, "Affected fixtures unavailable");
+  } else {
+    const label = Number(summary.changed_fixtures) === 1 ? "fixture" : "fixtures";
+    setText(ui.metricChangesDetail, `Across ${formatCount(summary.changed_fixtures)} ${label}`);
+  }
+
+  const latest = ui.latestSync;
+  latest.replaceChildren();
+  latest.append(element("span", { className: "sync-summary-label", text: "Latest successful checkpoint" }));
+  if (summary.latest_successful_sync_at_utc) {
+    latest.append(
+      element("strong", { text: formatDate(summary.latest_successful_sync_at_utc) }),
+      element("span", {
+        text: `Snapshot ${valueOrNotSupplied(summary.latest_successful_snapshot_id)} / import run ${valueOrNotSupplied(summary.latest_successful_import_run_id)}`,
+      }),
+    );
+  } else {
+    latest.append(
+      element("strong", { text: "Not recorded" }),
+      element("span", { text: "No successful checkpoint exists for this selection." }),
+    );
+  }
+}
+
+async function loadOverview() {
+  const requestId = ++state.overviewRequestId;
+  setStatus(ui.overviewStatus, "Loading aggregate metrics from the local API...", "loading");
+  try {
+    const summary = await request(
+      apiPath("/api/dashboard-summary", { competition_season_id: selectedCompetitionId() }),
+    );
+    if (requestId !== state.overviewRequestId) return;
+    renderSummary(summary);
+    setStatus(ui.overviewStatus, "Overview updated from current database records.", "ok");
+  } catch (error) {
+    if (requestId !== state.overviewRequestId) return;
+    [ui.metricTotal, ui.metricFinished, ui.metricUpcoming, ui.metricGoals, ui.metricChanges].forEach(
+      (node) => setText(node, "—"),
+    );
+    setText(ui.metricChangesDetail, "Affected fixtures unavailable");
+    ui.latestSync.replaceChildren(
+      element("span", { className: "sync-summary-label", text: "Latest successful checkpoint" }),
+      element("strong", { text: "Unavailable" }),
+      element("span", { text: "The checkpoint summary could not be loaded." }),
+    );
+    const message = describeRequestFailure("Overview metrics", error);
+    setStatus(ui.overviewStatus, message, "error");
+    showAppAlert(message);
+  }
+}
+
+function sortFixtures(matches) {
+  const direction = ui.sortSelect?.value === "kickoff-desc" ? -1 : 1;
+  return [...matches].sort((left, right) => {
+    const leftTime = left.kickoff_utc ? Date.parse(left.kickoff_utc) : Number.NaN;
+    const rightTime = right.kickoff_utc ? Date.parse(right.kickoff_utc) : Number.NaN;
+    const leftMissing = Number.isNaN(leftTime);
+    const rightMissing = Number.isNaN(rightTime);
+    if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+    if (leftMissing) return (Number(left.match_id) - Number(right.match_id)) * direction;
+    if (leftTime !== rightTime) return (leftTime - rightTime) * direction;
+    return (Number(left.match_id) - Number(right.match_id)) * direction;
+  });
 }
 
 function fixtureCard(match) {
-  const card = element("article", "fixture-card");
-  const meta = element("div", "fixture-meta");
-  meta.append(
-    element("span", "badge", match.is_finished ? "Finished" : "Upcoming"),
-    element("span", "muted", `Matchday ${match.matchday_number ?? "Not supplied"}`),
+  const card = element("article", { className: "fixture-card" });
+  const topLine = element("div", { className: "fixture-card-topline" });
+  topLine.append(
+    sourcePill(match),
+    element("span", { className: "metadata", text: `Matchday ${valueOrNotSupplied(match.matchday_number)}` }),
   );
-  const teams = element("div", "teams");
-  const home = element("div", "scoreline");
-  home.append(element("span", "", match.home_team), element("span", "score", scoreText(match)));
-  teams.append(home, element("div", "", match.away_team));
-  const button = element("button", "secondary", "View provenance");
+
+  const teamBlock = element("div", { className: "fixture-teams" });
+  const score = element("strong", {
+    className: "fixture-score",
+    text: scoreText(match.home_score, match.away_score),
+  });
+  teamBlock.append(
+    element("span", { className: "team-name", text: valueOrNotSupplied(match.home_team) }),
+    score,
+    element("span", { className: "team-name", text: valueOrNotSupplied(match.away_team) }),
+  );
+
+  const footer = element("div", { className: "fixture-footer" });
+  const stage = match.stage_name ? `${match.stage_name} / ` : "";
+  footer.append(
+    element("p", { className: "fixture-time", text: `${stage}${formatDate(match.kickoff_utc)}` }),
+    element("p", {
+      className: "metadata",
+      text: `Source updated ${formatDate(match.last_source_update_utc)}`,
+    }),
+  );
+  const button = element("button", { className: "button button-card", text: "View match details" });
   button.type = "button";
   button.addEventListener("click", () => showMatch(match.match_id));
-  card.append(meta, teams, element("p", "muted", formatDate(match.kickoff_utc)), button);
+  card.append(topLine, teamBlock, footer, button);
   return card;
 }
 
+function renderFixturePage(page) {
+  const matches = sortFixtures(page.items);
+  ui.fixtureList.replaceChildren();
+  if (matches.length === 0) {
+    renderListState(
+      ui.fixtureList,
+      "No fixtures match these filters",
+      "Change the filters or import a preserved source snapshot first.",
+    );
+  } else {
+    matches.forEach((match) => ui.fixtureList.append(fixtureCard(match)));
+    setBusy(ui.fixtureList, false);
+  }
+  const totalText = `${formatCount(page.total)} fixture${page.total === 1 ? "" : "s"}`;
+  setStatus(ui.fixtureStatus, `${totalText} found. Ordered by kickoff.`, "ok");
+}
+
 async function loadFixtures() {
-  setState(fixtureStatus, "Loading fixtures...");
-  fixtureList.replaceChildren();
-  const params = new URLSearchParams({ limit: "200" });
-  const finished = document.querySelector("#finished").value;
-  const search = document.querySelector("#search").value.trim();
-  if (competitionSelect.value) params.set("competition_season_id", competitionSelect.value);
-  if (matchdaySelect.value) params.set("matchday", matchdaySelect.value);
-  if (finished) params.set("finished", finished);
-  if (search) params.set("search", search);
+  const requestId = ++state.fixtureRequestId;
+  state.fixturePage = null;
+  state.fixturesLoading = true;
+  setBusy(ui.fixtureList, true);
+  setStatus(ui.fixtureStatus, "Loading fixtures...", "loading");
+  ui.fixtureList.replaceChildren(contentState("Loading fixtures", "Querying the local fixture API.", "loading"));
+  const parameters = {
+    competition_season_id: selectedCompetitionId(),
+    matchday: ui.matchdaySelect?.value || null,
+    finished: ui.finishedSelect?.value || null,
+    search: ui.searchInput?.value.trim() || null,
+    limit: 200,
+  };
   try {
-    const page = await request(`/api/matches?${params}`);
-    setState(fixtureStatus, `${page.total} fixture${page.total === 1 ? "" : "s"}`);
-    if (page.items.length === 0) {
-      fixtureList.append(emptyTemplate.content.cloneNode(true));
-      return;
-    }
-    page.items.forEach((match) => fixtureList.append(fixtureCard(match)));
+    const page = await request(apiPath("/api/matches", parameters));
+    if (requestId !== state.fixtureRequestId) return;
+    state.fixturePage = page;
+    renderFixturePage(page);
   } catch (error) {
-    setState(fixtureStatus, "Fixtures could not be loaded.", "error");
+    if (requestId !== state.fixtureRequestId) return;
+    const message = describeRequestFailure("Fixtures", error);
+    renderListState(ui.fixtureList, "Fixtures are unavailable", message, "error");
+    setStatus(ui.fixtureStatus, message, "error");
+    showAppAlert(message);
+  } finally {
+    if (requestId === state.fixtureRequestId) state.fixturesLoading = false;
   }
 }
 
-function recordList(title, records, formatter) {
-  const section = element("section", "record-list");
-  section.append(element("h3", "", title));
-  if (records.length === 0) {
-    section.append(element("p", "muted", "No records."));
-  } else {
-    records.forEach((record) => section.append(formatter(record)));
+function changeCard(change) {
+  const card = element("article", { className: "change-card" });
+  const heading = element("div", { className: "change-heading" });
+  heading.append(
+    element("div", {
+      className: "change-match",
+      text: `${valueOrNotSupplied(change.home_team)} vs ${valueOrNotSupplied(change.away_team)}`,
+    }),
+    statusPill(change.change_kind),
+  );
+  const values = element("div", { className: "change-values" });
+  const before = element("div", { className: "change-value" });
+  before.append(
+    element("span", { text: "Before" }),
+    element("strong", { text: valueOrNotSupplied(change.old_value) }),
+  );
+  const after = element("div", { className: "change-value" });
+  after.append(
+    element("span", { text: "After" }),
+    element("strong", { text: valueOrNotSupplied(change.new_value) }),
+  );
+  values.append(
+    before,
+    element("span", {
+      className: "change-arrow",
+      text: "->",
+      attributes: { "aria-hidden": "true" },
+    }),
+    after,
+  );
+
+  const provenance = element("div", { className: "change-provenance" });
+  provenance.append(
+    element("span", { text: `Field: ${change.field_name}` }),
+    element("span", { text: `Observed: ${formatDate(change.observed_at_utc)}` }),
+    element("span", {
+      text: `Snapshot ${change.source_snapshot_id} / ${compactHash(change.snapshot_sha256)}`,
+    }),
+    element("span", { text: `Captured: ${formatDate(change.snapshot_retrieved_at_utc)}` }),
+  );
+  const button = element("button", { className: "button button-quiet", text: "Open fixture" });
+  button.type = "button";
+  button.addEventListener("click", () => showMatch(change.match_id));
+  card.append(heading, values, provenance, button);
+  return card;
+}
+
+function renderChangePagination(total, itemCount) {
+  if (!ui.changePagination) return;
+  const hasRecords = total > 0;
+  ui.changePagination.hidden = !hasRecords;
+  if (!hasRecords) return;
+
+  const first = state.changeOffset + 1;
+  const last = Math.min(state.changeOffset + itemCount, total);
+  setText(
+    ui.changePageDescription,
+    `Showing ${formatCount(first)}-${formatCount(last)} of ${formatCount(total)} observed changes.`,
+  );
+  ui.previousChangePage.disabled = state.changeOffset === 0;
+  ui.nextChangePage.disabled = state.changeOffset + itemCount >= total;
+}
+
+async function loadChanges({ reset = false } = {}) {
+  if (reset) state.changeOffset = 0;
+  const requestId = ++state.changeRequestId;
+  setBusy(ui.changeList, true);
+  setStatus(ui.changesStatus, "Loading observed changes...", "loading");
+  ui.changeList.replaceChildren(contentState("Loading change history", "Querying snapshot comparisons.", "loading"));
+  try {
+    const page = await request(
+      apiPath("/api/match-changes", {
+        competition_season_id: selectedCompetitionId(),
+        limit: state.changePageSize,
+        offset: state.changeOffset,
+      }),
+    );
+    if (requestId !== state.changeRequestId) return;
+    if (page.total > 0 && page.items.length === 0 && state.changeOffset >= page.total) {
+      state.changeOffset = Math.floor((page.total - 1) / state.changePageSize) * state.changePageSize;
+      await loadChanges();
+      return;
+    }
+    ui.changeList.replaceChildren();
+    if (page.items.length === 0) {
+      renderListState(
+        ui.changeList,
+        "No observed fixture changes",
+        "No field-level transitions have been recorded for this competition selection.",
+      );
+    } else {
+      page.items.forEach((change) => ui.changeList.append(changeCard(change)));
+      setBusy(ui.changeList, false);
+    }
+    renderChangePagination(page.total, page.items.length);
+    setStatus(
+      ui.changesStatus,
+      `${formatCount(page.total)} recorded change${page.total === 1 ? "" : "s"}.`,
+      "ok",
+    );
+  } catch (error) {
+    if (requestId !== state.changeRequestId) return;
+    const message = describeRequestFailure("Change intelligence", error);
+    renderListState(ui.changeList, "Change history is unavailable", message, "error");
+    ui.changePagination.hidden = true;
+    setStatus(ui.changesStatus, message, "error");
+    showAppAlert(message);
   }
-  return section;
 }
 
 function resultRow(result) {
-  const score =
-    result.home_score === null || result.away_score === null
-      ? "Not supplied"
-      : `${result.home_score}\u2013${result.away_score}`;
-  return element("p", "", `${result.result_type}: ${score}`);
+  const row = element("li", { className: "detail-row" });
+  row.append(
+    element("strong", { text: result.result_type }),
+    element("span", { text: result.result_name || "Source result type" }),
+    element("span", { className: "detail-score", text: scoreText(result.home_score, result.away_score) }),
+  );
+  return row;
 }
 
 function goalRow(goal) {
-  const score =
-    goal.score_home === null || goal.score_away === null
-      ? "Score not supplied"
-      : `${goal.score_home}\u2013${goal.score_away}`;
-  const minute = goal.minute === null ? "" : ` - ${goal.minute}'`;
-  const scorer = goal.scorer_name ? ` - ${goal.scorer_name}` : "";
-  return element("p", "", `${score}${minute}${scorer}`);
+  const row = element("li", { className: "detail-row goal-row" });
+  const minute = goal.minute === null || goal.minute === undefined ? "Minute not supplied" : `${goal.minute}'`;
+  const flags = [
+    goal.is_penalty ? "penalty" : null,
+    goal.is_own_goal ? "own goal" : null,
+    goal.is_overtime ? "overtime" : null,
+  ].filter(Boolean);
+  row.append(
+    element("strong", { text: valueOrNotSupplied(goal.scorer_name) }),
+    element("span", { text: `${minute}${flags.length ? ` / ${flags.join(", ")}` : ""}` }),
+    element("span", { className: "detail-score", text: scoreText(goal.score_home, goal.score_away) }),
+  );
+  return row;
 }
 
-function changeRow(change) {
-  const row = element("div", "change");
+function detailList(title, items, formatter, emptyMessage) {
+  const section = element("section", { className: "detail-section" });
+  section.append(element("h3", { text: title }));
+  if (!items || items.length === 0) {
+    section.append(element("p", { className: "metadata", text: emptyMessage }));
+    return section;
+  }
+  const list = element("ul", { className: "detail-list" });
+  items.forEach((item) => list.append(formatter(item)));
+  section.append(list);
+  return section;
+}
+
+function detailChangeRow(change) {
+  const row = element("li", { className: "timeline-row" });
   row.append(
-    element(
-      "p",
-      "",
-      `${change.field_name}: ${change.old_value ?? "empty"} -> ${change.new_value ?? "empty"}`,
-    ),
-    element("p", "muted", formatDate(change.observed_at_utc)),
+    element("strong", { text: change.field_name }),
+    element("span", { text: `${valueOrNotSupplied(change.old_value)} -> ${valueOrNotSupplied(change.new_value)}` }),
+    element("span", { className: "metadata", text: formatDate(change.observed_at_utc) }),
   );
   return row;
 }
@@ -196,10 +612,17 @@ function noteToken() {
   return document.querySelector("#notes-token")?.value.trim() ?? "";
 }
 
+function createNoteStatus() {
+  return element("p", {
+    className: "note-status",
+    attributes: { role: "status", "aria-live": "polite" },
+  });
+}
+
 async function archiveNote(noteId, matchId, statusNode) {
   const token = noteToken();
   if (!token) {
-    setState(statusNode, "Enter the local note-write token first.", "error");
+    setStatus(statusNode, "Enter the local note-write token before archiving a note.", "error");
     return;
   }
   try {
@@ -209,47 +632,70 @@ async function archiveNote(noteId, matchId, statusNode) {
     });
     await showMatch(matchId, false);
   } catch (error) {
-    setState(statusNode, "The note could not be archived.", "error");
+    setStatus(statusNode, describeRequestFailure("The note", error), "error");
   }
 }
 
-async function editNote(note, matchId, statusNode) {
-  const token = noteToken();
-  if (!token) {
-    setState(statusNode, "Enter the local note-write token first.", "error");
-    return;
-  }
-  const updatedText = window.prompt("Update local note", note.note_text);
-  if (updatedText === null) return;
-  if (!updatedText.trim()) {
-    setState(statusNode, "A note cannot be blank.", "error");
-    return;
-  }
-  try {
-    await request(`/api/notes/${note.note_id}`, {
-      method: "PUT",
-      headers: { "X-Notes-Token": token },
-      body: JSON.stringify({ note_text: updatedText.trim() }),
-    });
-    await showMatch(matchId, false);
-  } catch (error) {
-    setState(statusNode, "The note could not be updated.", "error");
-  }
+function startNoteEdit(note, matchId, statusNode, row) {
+  if (row.querySelector(".note-edit-form")) return;
+  const form = element("form", { className: "note-edit-form" });
+  const label = element("label", { text: "Edit local note" });
+  const textInput = element("textarea", {
+    attributes: { maxlength: "4000", required: "" },
+  });
+  textInput.value = note.note_text;
+  label.append(textInput);
+  const actions = element("div", { className: "note-actions" });
+  const save = element("button", { className: "button button-primary", text: "Save note" });
+  const cancel = element("button", { className: "button button-quiet", text: "Cancel" });
+  save.type = "submit";
+  cancel.type = "button";
+  cancel.addEventListener("click", () => form.remove());
+  actions.append(save, cancel);
+  form.append(label, actions);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const token = noteToken();
+    const updatedText = textInput.value.trim();
+    if (!token) {
+      setStatus(statusNode, "Enter the local note-write token before editing a note.", "error");
+      return;
+    }
+    if (!updatedText) {
+      setStatus(statusNode, "A note cannot be blank.", "error");
+      return;
+    }
+    try {
+      await request(`/api/notes/${note.note_id}`, {
+        method: "PUT",
+        headers: { "X-Notes-Token": token },
+        body: JSON.stringify({ note_text: updatedText }),
+      });
+      await showMatch(matchId, false);
+    } catch (error) {
+      setStatus(statusNode, describeRequestFailure("The note", error), "error");
+    }
+  });
+  row.append(form);
+  textInput.focus();
 }
 
 function noteRow(note, matchId, statusNode) {
-  const row = element("div", "change");
+  const row = element("li", { className: "note-row" });
   row.append(
-    element("p", "", note.note_text),
-    element("p", "muted", `${note.created_by ?? "Local user"} - ${formatDate(note.updated_at_utc)}`),
+    element("p", { text: note.note_text }),
+    element("span", {
+      className: "metadata",
+      text: `${note.created_by || "Local user"} / ${formatDate(note.updated_at_utc)}`,
+    }),
   );
-  if (applicationState.noteWritesEnabled) {
-    const actions = element("div", "note-actions");
-    const edit = element("button", "secondary compact", "Edit");
-    const archive = element("button", "secondary compact", "Archive");
+  if (state.noteWritesEnabled) {
+    const actions = element("div", { className: "note-actions" });
+    const edit = element("button", { className: "button button-quiet", text: "Edit" });
+    const archive = element("button", { className: "button button-quiet", text: "Archive" });
     edit.type = "button";
     archive.type = "button";
-    edit.addEventListener("click", () => editNote(note, matchId, statusNode));
+    edit.addEventListener("click", () => startNoteEdit(note, matchId, statusNode, row));
     archive.addEventListener("click", () => archiveNote(note.note_id, matchId, statusNode));
     actions.append(edit, archive);
     row.append(actions);
@@ -258,42 +704,49 @@ function noteRow(note, matchId, statusNode) {
 }
 
 function noteEditor(matchId, statusNode) {
-  const section = element("section", "note-editor");
-  section.append(element("h3", "", "Add local note"));
-  if (!applicationState.noteWritesEnabled) {
-    section.append(element("p", "muted", "Note writes are disabled by local configuration."));
+  const section = element("section", { className: "detail-section note-editor" });
+  section.append(element("h3", { text: "Local match notes" }));
+  if (!state.noteWritesEnabled) {
+    section.append(
+      element("p", {
+        className: "metadata",
+        text: "Note writes are disabled by local configuration. Existing notes remain visible.",
+      }),
+    );
     return section;
   }
-  const form = element("form", "note-form");
-  const tokenLabel = element("label", "", "Local write token");
-  const tokenInput = element("input", "");
-  tokenInput.id = "notes-token";
-  tokenInput.type = "password";
-  tokenInput.autocomplete = "off";
-  tokenInput.required = true;
+
+  const form = element("form", { className: "note-form" });
+  const tokenLabel = element("label", { text: "Local note-write token" });
+  const tokenInput = element("input", {
+    attributes: {
+      id: "notes-token",
+      type: "password",
+      autocomplete: "off",
+      required: "",
+    },
+  });
   tokenLabel.append(tokenInput);
-  const textLabel = element("label", "", "Note");
-  const textInput = element("textarea", "");
-  textInput.name = "note_text";
-  textInput.maxLength = 4000;
-  textInput.required = true;
-  textLabel.append(textInput);
-  const authorLabel = element("label", "", "Created by");
-  const authorInput = element("input", "");
-  authorInput.name = "created_by";
-  authorInput.maxLength = 200;
-  authorInput.value = "local-user";
+  const noteLabel = element("label", { text: "Note" });
+  const noteInput = element("textarea", {
+    attributes: { name: "note_text", maxlength: "4000", required: "" },
+  });
+  noteLabel.append(noteInput);
+  const authorLabel = element("label", { text: "Created by" });
+  const authorInput = element("input", {
+    attributes: { name: "created_by", maxlength: "200", required: "", value: "local-user" },
+  });
   authorLabel.append(authorInput);
-  const submit = element("button", "primary", "Add note");
+  const submit = element("button", { className: "button button-primary", text: "Add local note" });
   submit.type = "submit";
-  form.append(tokenLabel, textLabel, authorLabel, submit);
+  form.append(tokenLabel, noteLabel, authorLabel, submit);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const token = tokenInput.value.trim();
-    const noteText = textInput.value.trim();
+    const noteText = noteInput.value.trim();
     const createdBy = authorInput.value.trim();
     if (!token || !noteText || !createdBy) {
-      setState(statusNode, "Token, note, and author are required.", "error");
+      setStatus(statusNode, "Token, note, and author are required.", "error");
       return;
     }
     try {
@@ -304,156 +757,308 @@ function noteEditor(matchId, statusNode) {
       });
       await showMatch(matchId, false);
     } catch (error) {
-      setState(statusNode, "The note could not be created.", "error");
+      setStatus(statusNode, describeRequestFailure("The note", error), "error");
     }
   });
   section.append(form);
   return section;
 }
 
+function buildMatchDetail(match, changes, notes, issues) {
+  const fragment = document.createDocumentFragment();
+  const header = element("header", { className: "dialog-heading" });
+  const title = element("h2", {
+    text: `${match.home_team} vs ${match.away_team}`,
+    attributes: { id: "dialog-title" },
+  });
+  header.append(
+    element("p", {
+      className: "eyebrow",
+      text: `Provider match ${match.provider_match_id} / Matchday ${valueOrNotSupplied(match.matchday_number)}`,
+    }),
+    title,
+    element("p", { className: "dialog-score", text: scoreText(match.home_score, match.away_score) }),
+    element("p", { className: "metadata", text: `${formatDate(match.kickoff_utc)} / ${match.stage_name || "Stage not supplied"}` }),
+    element("p", { className: "metadata", text: `Venue: ${valueOrNotSupplied(match.venue)}` }),
+  );
+  fragment.append(header);
+
+  const columns = element("div", { className: "detail-grid" });
+  const sporting = element("div", { className: "detail-column" });
+  sporting.append(
+    detailList(
+      "Typed results",
+      match.results,
+      resultRow,
+      "No result records were supplied by the source for this fixture.",
+    ),
+    detailList(
+      "Goal events",
+      match.goals,
+      goalRow,
+      "No goal events were supplied by the source for this fixture.",
+    ),
+  );
+
+  const provenance = element("div", { className: "detail-column" });
+  if (issues.changes) {
+    provenance.append(detailList("Observed changes", [], () => element("li"), issues.changes));
+  } else {
+    provenance.append(
+      detailList(
+        "Observed changes",
+        changes,
+        detailChangeRow,
+        "No field-level changes have been recorded for this fixture.",
+      ),
+    );
+  }
+  const noteStatus = createNoteStatus();
+  if (issues.notes) {
+    provenance.append(detailList("Local notes", [], () => element("li"), issues.notes));
+  } else {
+    provenance.append(
+      detailList("Local notes", notes, (note) => noteRow(note, match.match_id, noteStatus), "No local notes."),
+    );
+  }
+  provenance.append(noteEditor(match.match_id, noteStatus), noteStatus);
+  columns.append(sporting, provenance);
+  fragment.append(columns);
+  return fragment;
+}
+
 async function showMatch(matchId, openDialog = true) {
-  matchDetail.replaceChildren(element("p", "status", "Loading details..."));
-  if (openDialog && !dialog.open) dialog.showModal();
+  const requestId = ++state.detailRequestId;
+  ui.matchDetail.replaceChildren(contentState("Loading match details", "Retrieving fixture, provenance, and notes.", "loading"));
+  if (openDialog && !ui.dialog.open) {
+    if (typeof ui.dialog.showModal === "function") {
+      ui.dialog.showModal();
+    } else {
+      ui.dialog.setAttribute("open", "");
+    }
+  }
+
   try {
-    const [match, changes, notes] = await Promise.all([
-      request(`/api/matches/${matchId}`),
+    const match = await request(`/api/matches/${matchId}`);
+    const [changeResult, noteResult] = await Promise.allSettled([
       request(`/api/matches/${matchId}/changes`),
       request(`/api/matches/${matchId}/notes`),
     ]);
-    const heading = element("div", "");
-    const title = element("h2", "", `${match.home_team} vs ${match.away_team}`);
-    title.id = "dialog-title";
-    heading.append(
-      element("p", "eyebrow", `Provider match ${match.provider_match_id}`),
-      title,
-      element("p", "muted", formatDate(match.kickoff_utc)),
-    );
-    const noteStatus = element("p", "status");
-    noteStatus.setAttribute("role", "status");
-    noteStatus.setAttribute("aria-live", "polite");
-    const grid = element("div", "detail-grid");
-    const data = element("div", "");
-    data.append(
-      recordList("Results", match.results, resultRow),
-      recordList("Goals", match.goals, goalRow),
-    );
-    const provenance = element("div", "");
-    provenance.append(
-      recordList("Observed changes", changes, changeRow),
-      recordList("Local notes", notes, (note) => noteRow(note, matchId, noteStatus)),
-      noteEditor(matchId, noteStatus),
-      noteStatus,
-    );
-    grid.append(data, provenance);
-    matchDetail.replaceChildren(heading, grid);
+    if (requestId !== state.detailRequestId) return;
+    const changes = changeResult.status === "fulfilled" ? changeResult.value : [];
+    const notes = noteResult.status === "fulfilled" ? noteResult.value : [];
+    const issues = {
+      changes:
+        changeResult.status === "rejected"
+          ? describeRequestFailure("Change history", changeResult.reason)
+          : null,
+      notes:
+        noteResult.status === "rejected" ? describeRequestFailure("Local notes", noteResult.reason) : null,
+    };
+    ui.matchDetail.replaceChildren(buildMatchDetail(match, changes, notes, issues));
   } catch (error) {
-    matchDetail.replaceChildren(element("p", "error", "Match details could not be loaded."));
+    if (requestId !== state.detailRequestId) return;
+    ui.matchDetail.replaceChildren(
+      contentState("Match details are unavailable", describeRequestFailure("Match details", error), "error"),
+    );
   }
 }
 
 function importRunRow(run) {
-  const row = element("div", "run");
-  const heading = element("div", "run-heading");
-  heading.append(element("strong", "", `Run ${run.import_run_id}`), element("span", "badge", run.status));
-  const replay = run.is_replay ? " - replay" : "";
-  row.append(
-    heading,
-    element("p", "muted", `${formatDate(run.started_at_utc)}${replay}`),
-    element(
-      "p",
-      "",
-      `${run.matches_seen ?? 0} seen - ${run.matches_inserted ?? 0} inserted - ${run.matches_updated ?? 0} updated`,
-    ),
+  const row = element("article", { className: "operation-row" });
+  const heading = element("div", { className: "operation-row-heading" });
+  heading.append(
+    element("strong", { text: `Import run ${run.import_run_id}` }),
+    statusPill(run.status),
   );
-  if (run.error_message) row.append(element("p", "error", run.error_message));
+  const facts = element("dl", { className: "operation-facts" });
+  [
+    ["Started", formatDate(run.started_at_utc)],
+    ["Snapshot", compactHash(run.snapshot_sha256)],
+    ["Matchday", valueOrNotSupplied(run.matchday_number)],
+    ["Fixture records", `${valueOrNotSupplied(run.matches_seen)} seen / ${valueOrNotSupplied(run.matches_inserted)} inserted / ${valueOrNotSupplied(run.matches_updated)} updated`],
+  ].forEach(([label, value]) => {
+    facts.append(element("dt", { text: label }), element("dd", { text: value }));
+  });
+  row.append(heading, facts);
+  if (run.is_replay) row.append(element("p", { className: "metadata", text: "Replay of preserved source evidence." }));
+  if (run.error_message) row.append(element("p", { className: "inline-error", text: run.error_message }));
   return row;
 }
 
 function checkpointRow(checkpoint) {
-  const row = element("div", "run");
+  const row = element("article", { className: "operation-row" });
   row.append(
-    element("strong", "", `Matchday ${checkpoint.matchday_number ?? "scope"}`),
-    element("p", "muted", checkpoint.scope_key),
-    element("p", "", `Processed ${formatDate(checkpoint.last_processed_at_utc)}`),
-    element(
-      "p",
-      "muted",
-      `Import run ${checkpoint.last_successful_import_run_id ?? "not recorded"}`,
-    ),
+    element("strong", { text: `Matchday ${valueOrNotSupplied(checkpoint.matchday_number)}` }),
+    element("p", { className: "metadata", text: checkpoint.scope_key }),
   );
+  const facts = element("dl", { className: "operation-facts" });
+  [
+    ["Processed", formatDate(checkpoint.last_processed_at_utc)],
+    ["Source update", formatDate(checkpoint.last_source_update_utc)],
+    ["Snapshot", valueOrNotSupplied(checkpoint.last_successful_snapshot_id)],
+    ["Import run", valueOrNotSupplied(checkpoint.last_successful_import_run_id)],
+  ].forEach(([label, value]) => {
+    facts.append(element("dt", { text: label }), element("dd", { text: value }));
+  });
+  row.append(facts);
   return row;
 }
 
 function issueRow(issue) {
-  const row = element("div", "issue");
+  const row = element("article", { className: "operation-row validation-row" });
+  const heading = element("div", { className: "operation-row-heading" });
+  heading.append(
+    element("strong", { text: issue.issue_code }),
+    statusPill(issue.severity),
+  );
   row.append(
-    element("strong", "", `${issue.severity}: ${issue.issue_code}`),
-    element("p", "", issue.message),
-    element("p", "muted", formatDate(issue.created_at_utc)),
+    heading,
+    element("p", { text: issue.message }),
+    element("p", { className: "metadata", text: formatDate(issue.created_at_utc) }),
   );
   return row;
 }
 
-function replaceRecordList(container, records, formatter) {
-  container.replaceChildren(...records.map(formatter));
-  if (records.length === 0) container.append(emptyTemplate.content.cloneNode(true));
+function renderOperationRecords(container, records, formatter, emptyTitle, emptyDetail) {
+  if (!container) return;
+  container.replaceChildren();
+  if (records.length === 0) {
+    container.append(contentState(emptyTitle, emptyDetail));
+    return;
+  }
+  records.forEach((record) => container.append(formatter(record)));
 }
 
 async function loadOperations() {
-  const status = document.querySelector("#operations-status");
-  const runs = document.querySelector("#import-runs");
-  const checkpoints = document.querySelector("#sync-checkpoints");
-  const issues = document.querySelector("#validation-issues");
-  setState(status, "Loading operational history...");
-  runs.replaceChildren();
-  checkpoints.replaceChildren();
-  issues.replaceChildren();
-  try {
-    const [runData, checkpointData, issueData] = await Promise.all([
-      request("/api/import-runs?limit=20"),
-      request("/api/sync-checkpoints?limit=20"),
-      request("/api/validation-issues?limit=20"),
-    ]);
-    replaceRecordList(runs, runData, importRunRow);
-    replaceRecordList(checkpoints, checkpointData, checkpointRow);
-    replaceRecordList(issues, issueData, issueRow);
-    setState(status, "Operational history loaded.");
-  } catch (error) {
-    setState(status, "Operational history could not be loaded.", "error");
+  const requestId = ++state.operationsRequestId;
+  setStatus(ui.operationsStatus, "Loading import and synchronization records...", "loading");
+  [ui.importRuns, ui.checkpoints, ui.validationIssues].forEach((container) => {
+    setBusy(container, true);
+    container.replaceChildren(contentState("Loading records", "Querying the local operations API.", "loading"));
+  });
+  const results = await Promise.allSettled([
+    request("/api/import-runs?limit=20"),
+    request("/api/sync-checkpoints?limit=20"),
+    request("/api/validation-issues?limit=20"),
+  ]);
+  if (requestId !== state.operationsRequestId) return;
+  const definitions = [
+    [ui.importRuns, results[0], importRunRow, "No import runs", "No source import provenance is recorded yet."],
+    [ui.checkpoints, results[1], checkpointRow, "No checkpoints", "No successful processing checkpoint is recorded yet."],
+    [ui.validationIssues, results[2], issueRow, "No validation evidence", "No validation warnings or errors are recorded."],
+  ];
+  let failures = 0;
+  definitions.forEach(([container, result, formatter, emptyTitle, emptyDetail]) => {
+    if (result.status === "fulfilled") {
+      renderOperationRecords(container, result.value, formatter, emptyTitle, emptyDetail);
+    } else {
+      failures += 1;
+      renderListState(
+        container,
+        "Records are unavailable",
+        describeRequestFailure("This operational feed", result.reason),
+        "error",
+      );
+    }
+    setBusy(container, false);
+  });
+  if (failures) {
+    const message = `${failures} operational feed${failures === 1 ? " is" : "s are"} unavailable.`;
+    setStatus(ui.operationsStatus, `${message} Review the cards for safe details.`, "error");
+    showAppAlert(message);
+  } else {
+    setStatus(ui.operationsStatus, "Import, checkpoint, and validation records updated.", "ok");
   }
 }
 
-filters.addEventListener("submit", (event) => {
-  event.preventDefault();
-  loadFixtures();
-});
-
-competitionSelect.addEventListener("change", async () => {
-  await loadMatchdays();
-  await loadFixtures();
-});
-
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((item) => item.classList.remove("is-active"));
-    document.querySelectorAll(".panel").forEach((panel) => {
-      panel.classList.remove("is-active");
-      panel.hidden = true;
-    });
-    tab.classList.add("is-active");
-    const panel = document.querySelector(`#${tab.dataset.panel}`);
-    panel.classList.add("is-active");
-    panel.hidden = false;
-    if (tab.dataset.panel === "operations") loadOperations();
-  });
-});
-
-document.querySelector("#refresh-operations").addEventListener("click", loadOperations);
-
-async function initialize() {
-  await Promise.all([checkHealth(), loadServiceStatus(), loadCompetitions()]);
-  await loadMatchdays();
-  await loadFixtures();
+async function refreshDashboard() {
+  clearAppAlert();
+  const competitionsLoaded = await loadCompetitions();
+  if (competitionsLoaded) await loadMatchdays();
+  await Promise.all([
+    loadHealth(),
+    loadServiceStatus(),
+    loadOverview(),
+    loadFixtures(),
+    loadChanges({ reset: true }),
+    loadOperations(),
+  ]);
 }
 
-initialize();
+function clearFilters() {
+  ui.competitionSelect.value = "";
+  ui.matchdaySelect.value = "";
+  ui.finishedSelect.value = "";
+  ui.sortSelect.value = "kickoff-asc";
+  ui.searchInput.value = "";
+}
+
+function attachEventListeners() {
+  ui.filters.addEventListener("submit", (event) => {
+    event.preventDefault();
+    loadFixtures();
+  });
+  ui.competitionSelect.addEventListener("change", async () => {
+    renderCompetitionContext();
+    const matchdaysLoaded = await loadMatchdays();
+    if (!matchdaysLoaded) return;
+    await Promise.all([loadOverview(), loadFixtures(), loadChanges({ reset: true })]);
+  });
+  ui.sortSelect.addEventListener("change", () => {
+    if (state.fixturePage) {
+      renderFixturePage(state.fixturePage);
+    } else if (!state.fixturesLoading) {
+      void loadFixtures();
+    }
+  });
+  document.querySelector("#clear-filters").addEventListener("click", async () => {
+    clearFilters();
+    renderCompetitionContext();
+    const matchdaysLoaded = await loadMatchdays();
+    if (!matchdaysLoaded) return;
+    await Promise.all([loadOverview(), loadFixtures(), loadChanges({ reset: true })]);
+  });
+  document.querySelector("#refresh-dashboard").addEventListener("click", refreshDashboard);
+  document.querySelector("#refresh-changes").addEventListener("click", loadChanges);
+  document.querySelector("#refresh-operations").addEventListener("click", loadOperations);
+  ui.previousChangePage.addEventListener("click", async () => {
+    if (ui.previousChangePage.disabled) return;
+    state.changeOffset = Math.max(0, state.changeOffset - state.changePageSize);
+    await loadChanges();
+  });
+  ui.nextChangePage.addEventListener("click", async () => {
+    if (ui.nextChangePage.disabled) return;
+    state.changeOffset += state.changePageSize;
+    await loadChanges();
+  });
+}
+
+function dashboardMarkupIsComplete() {
+  return Object.values(ui).every(Boolean);
+}
+
+async function initialize() {
+  if (!dashboardMarkupIsComplete()) {
+    const fallback = element("p", {
+      className: "app-alert",
+      text: "Dashboard markup is incomplete. Reload the page after confirming the deployed assets match the application version.",
+      attributes: { role: "alert" },
+    });
+    document.body.prepend(fallback);
+    return;
+  }
+  attachEventListeners();
+  await refreshDashboard();
+}
+
+window.addEventListener("error", () => {
+  showAppAlert("The dashboard encountered a client-side error. Reload the page and check the browser console if it persists.");
+});
+window.addEventListener("unhandledrejection", () => {
+  showAppAlert("The dashboard could not complete an asynchronous request. Check the visible panel errors and local API service.");
+});
+
+initialize().catch(() => {
+  showAppAlert("The dashboard could not start. Reload the page after confirming the local API is running.");
+});
