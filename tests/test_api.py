@@ -213,6 +213,8 @@ def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
     status_response = client.get("/api/status")
     matchdays_response = client.get("/api/matchdays?competition_season_id=1")
     checkpoints_response = client.get("/api/sync-checkpoints")
+    import_runs_response = client.get("/api/import-runs")
+    validation_issues_response = client.get("/api/validation-issues")
 
     assert status_response.status_code == 200
     assert status_response.json() == {
@@ -223,6 +225,10 @@ def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
     assert "token" not in status_response.text.lower()
     assert matchdays_response.json()[0]["match_count"] == 18
     assert checkpoints_response.json()[0]["last_successful_import_run_id"] == 3
+    assert import_runs_response.status_code == 200
+    assert validation_issues_response.status_code == 200
+    assert import_runs_response.json() == []
+    assert validation_issues_response.json() == []
 
 
 def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
@@ -236,14 +242,34 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     changes_response = client.get("/api/match-changes?competition_season_id=1&limit=20")
 
     assert dashboard_response.status_code == 200
+    assert "Overview" in dashboard_response.text
     assert "Match explorer" in dashboard_response.text
     assert "Change intelligence" in dashboard_response.text
+    assert "Import &amp; sync monitor" not in dashboard_response.text
+    assert 'href="#operations"' not in dashboard_response.text
+    assert 'id="operations"' not in dashboard_response.text
+    assert 'id="last-updated"' in dashboard_response.text
+    assert "Last updated" in dashboard_response.text
+    assert "Verified source observations" not in dashboard_response.text
+    assert (
+        "Local-only application. Fixture facts come from preserved OpenLigaDB observations"
+        not in (dashboard_response.text)
+    )
+    assert "UTC API timestamps are displayed in this browser's local timezone" not in (
+        dashboard_response.text
+    )
     assert 'rel="icon"' in dashboard_response.text
     assert 'id="fixture-sort"' in dashboard_response.text
     assert script_response.status_code == 200
     assert "javascript" in script_response.headers["content-type"]
     assert "/api/dashboard-summary" in script_response.text
     assert "/api/match-changes" in script_response.text
+    assert "latest_successful_sync_at_utc" in script_response.text
+    assert "/api/import-runs" not in script_response.text
+    assert "/api/sync-checkpoints" not in script_response.text
+    assert "/api/validation-issues" not in script_response.text
+    assert "loadOperations" not in script_response.text
+    assert "operationsRequestId" not in script_response.text
     assert "function sortFixtures" in script_response.text
     assert "No fixtures match these filters" in script_response.text
     assert 'id="change-page-previous"' in dashboard_response.text
@@ -260,6 +286,8 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "text/css" in stylesheet_response.headers["content-type"]
     assert ".metric-grid" in stylesheet_response.text
     assert ".pagination" in stylesheet_response.text
+    assert ".last-updated" in stylesheet_response.text
+    assert ".operations-grid" not in stylesheet_response.text
     assert summary_response.json()["goals_recorded"] == 74
     assert summary_response.json()["detected_changes"] == 1
     assert summary_response.json()["changed_fixtures"] == 1
