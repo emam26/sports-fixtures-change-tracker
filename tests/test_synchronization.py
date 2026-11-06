@@ -174,6 +174,7 @@ def test_coordinator_passes_validated_settings_to_snapshot_loader(
 
     loaded: dict[str, Any] = {}
     snapshot_directory = tmp_path / "snapshot"
+
     @dataclass(frozen=True)
     class Parsed:
         source_last_change_utc: datetime | None = None

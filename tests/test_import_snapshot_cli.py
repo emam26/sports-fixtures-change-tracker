@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pyodbc
-
 from scripts import import_snapshot
 
 
