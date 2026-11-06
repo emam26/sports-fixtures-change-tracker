@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
 from typing import Any, Protocol
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class Repository(Protocol):
@@ -26,9 +29,19 @@ class Repository(Protocol):
         offset: int,
     ) -> tuple[list[dict[str, Any]], int]: ...
 
+    def dashboard_summary(self, competition_season_id: int | None) -> dict[str, Any]: ...
+
     def match(self, match_id: int) -> dict[str, Any] | None: ...
 
     def changes(self, match_id: int) -> list[dict[str, Any]]: ...
+
+    def match_changes(
+        self,
+        *,
+        competition_season_id: int | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]: ...
 
     def sync_checkpoints(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]: ...
 
@@ -148,9 +161,7 @@ class SQLServerRepository:
             predicates.append("m.source_match_is_finished = ?")
             params.append(finished)
         if search:
-            predicates.append(
-                "(ht.team_name LIKE ? ESCAPE '~' OR at.team_name LIKE ? ESCAPE '~')"
-            )
+            predicates.append("(ht.team_name LIKE ? ESCAPE '~' OR at.team_name LIKE ? ESCAPE '~')")
             term = _like_pattern(search)
             params.extend((term, term))
         where = " AND ".join(predicates)
@@ -190,6 +201,88 @@ class SQLServerRepository:
             (*params, offset, limit),
         )
         return items, int(total["total"])
+
+    def dashboard_summary(self, competition_season_id: int | None) -> dict[str, Any]:
+        match_where = "1 = 1"
+        checkpoint_where = "1 = 1"
+        parameters: tuple[Any, ...] = ()
+        if competition_season_id is not None:
+            match_where = "m.competition_season_id = ?"
+            checkpoint_where = "sc.competition_season_id = ?"
+            parameters = (competition_season_id,)
+
+        def read_component(operation: str, sql: str) -> list[dict[str, Any]]:
+            try:
+                return self._read(sql, parameters)
+            except Exception as exc:
+                _LOGGER.error(
+                    "Dashboard summary read failed (operation=%s, error_type=%s)",
+                    operation,
+                    type(exc).__name__,
+                )
+                raise
+
+        fixture_counts = read_component(
+            "fixture-counts",
+            f"""
+            SELECT COUNT_BIG(*) AS total_fixtures,
+                   COALESCE(
+                       SUM(CASE WHEN m.source_match_is_finished = 1 THEN 1 ELSE 0 END),
+                       0
+                   ) AS finished_fixtures,
+                   COALESCE(
+                       SUM(CASE WHEN m.source_match_is_finished = 0 THEN 1 ELSE 0 END),
+                       0
+                   ) AS upcoming_fixtures
+            FROM dbo.matches AS m
+            WHERE {match_where};
+            """,
+        )[0]
+        goal_counts = read_component(
+            "goal-counts",
+            f"""
+            SELECT COUNT_BIG(*) AS goals_recorded
+            FROM dbo.match_goals AS mg
+            INNER JOIN dbo.matches AS m ON m.match_id = mg.match_id
+            WHERE {match_where};
+            """,
+        )[0]
+        change_counts = read_component(
+            "change-counts",
+            f"""
+            SELECT COUNT_BIG(*) AS detected_changes,
+                   COUNT_BIG(DISTINCT mc.match_id) AS changed_fixtures
+            FROM dbo.match_changes AS mc
+            INNER JOIN dbo.matches AS m ON m.match_id = mc.match_id
+            WHERE {match_where};
+            """,
+        )[0]
+        checkpoints = read_component(
+            "latest-successful-checkpoint",
+            f"""
+            SELECT TOP (1)
+                   sc.last_processed_at_utc AS latest_successful_sync_at_utc,
+                   sc.last_successful_snapshot_id,
+                   sc.last_successful_import_run_id
+            FROM dbo.sync_checkpoints AS sc
+            WHERE sc.last_successful_import_run_id IS NOT NULL
+              AND sc.last_processed_at_utc IS NOT NULL
+              AND {checkpoint_where}
+            ORDER BY sc.last_processed_at_utc DESC, sc.sync_checkpoint_id DESC;
+            """,
+        )
+        checkpoint = checkpoints[0] if checkpoints else {}
+        return {
+            "total_fixtures": int(fixture_counts["total_fixtures"] or 0),
+            "finished_fixtures": int(fixture_counts["finished_fixtures"] or 0),
+            "upcoming_fixtures": int(fixture_counts["upcoming_fixtures"] or 0),
+            "goals_recorded": int(goal_counts["goals_recorded"] or 0),
+            "detected_changes": int(change_counts["detected_changes"] or 0),
+            "changed_fixtures": int(change_counts["changed_fixtures"] or 0),
+            "latest_successful_sync_at_utc": checkpoint.get("latest_successful_sync_at_utc"),
+            "latest_successful_snapshot_id": checkpoint.get("latest_successful_snapshot_id"),
+            "latest_successful_import_run_id": checkpoint.get("latest_successful_import_run_id"),
+        }
 
     def match(self, match_id: int) -> dict[str, Any] | None:
         records = self._read(
@@ -267,6 +360,55 @@ class SQLServerRepository:
             """,
             (match_id,),
         )
+
+    def match_changes(
+        self,
+        *,
+        competition_season_id: int | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        predicates = ["1 = 1"]
+        params: list[Any] = []
+        if competition_season_id is not None:
+            predicates.append("m.competition_season_id = ?")
+            params.append(competition_season_id)
+        where = " AND ".join(predicates)
+        base = f"""
+            FROM dbo.match_changes AS mc
+            INNER JOIN dbo.matches AS m ON m.match_id = mc.match_id
+            INNER JOIN dbo.teams AS ht ON ht.team_id = m.home_team_id
+            INNER JOIN dbo.teams AS at ON at.team_id = m.away_team_id
+            INNER JOIN dbo.source_snapshots AS ss
+                ON ss.source_snapshot_id = mc.source_snapshot_id
+            WHERE {where}
+        """
+        total = self._read(f"SELECT COUNT_BIG(*) AS total {base}", tuple(params))[0]
+        items = self._read(
+            f"""
+            SELECT mc.match_change_id,
+                   m.match_id,
+                   m.provider_match_id,
+                   m.matchday_number,
+                   ht.team_name AS home_team,
+                   at.team_name AS away_team,
+                   mc.field_name,
+                   mc.change_kind,
+                   mc.old_value,
+                   mc.new_value,
+                   mc.observed_at_utc,
+                   mc.source_last_update_utc,
+                   mc.import_run_id,
+                   mc.source_snapshot_id,
+                   ss.sha256 AS snapshot_sha256,
+                   ss.retrieved_at_utc AS snapshot_retrieved_at_utc
+            {base}
+            ORDER BY mc.observed_at_utc DESC, mc.match_change_id DESC
+            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
+            """,
+            (*params, offset, limit),
+        )
+        return items, int(total["total"])
 
     def sync_checkpoints(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
         total = self._read("SELECT COUNT_BIG(*) AS total FROM dbo.sync_checkpoints;")[0]

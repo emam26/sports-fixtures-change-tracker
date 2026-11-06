@@ -11,6 +11,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Path as PathParameter,
     Query,
     Request,
     Response,
@@ -21,11 +22,13 @@ from fastapi.staticfiles import StaticFiles
 
 from sports_tracker.api.models import (
     Competition,
+    DashboardSummary,
     Health,
     ImportRun,
     MatchChange,
-    MatchDetail,
+    MatchChangePage,
     MatchdaySummary,
+    MatchDetail,
     MatchPage,
     Note,
     NoteCreate,
@@ -102,6 +105,7 @@ def create_app(
     RepositoryDependency = Annotated[Repository, Depends(get_repository)]
     Limit = Annotated[int, Query(ge=1, le=200)]
     Offset = Annotated[int, Query(ge=0)]
+    PositiveId = Annotated[int, PathParameter(ge=1)]
 
     @app.get("/health", response_model=Health)
     def health(repository: RepositoryDependency) -> Health:
@@ -150,16 +154,37 @@ def create_app(
         )
         return MatchPage(items=items, total=total, limit=limit, offset=offset)
 
+    @app.get("/api/dashboard-summary", response_model=DashboardSummary)
+    def dashboard_summary(
+        repository: RepositoryDependency,
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+    ) -> DashboardSummary:
+        return repository.dashboard_summary(competition_season_id)
+
     @app.get("/api/matches/{match_id}", response_model=MatchDetail)
-    def match(match_id: int, repository: RepositoryDependency):
+    def match(match_id: PositiveId, repository: RepositoryDependency):
         record = repository.match(match_id)
         if record is None:
             raise HTTPException(status_code=404, detail="Match not found")
         return record
 
     @app.get("/api/matches/{match_id}/changes", response_model=list[MatchChange])
-    def changes(match_id: int, repository: RepositoryDependency):
+    def changes(match_id: PositiveId, repository: RepositoryDependency):
         return repository.changes(match_id)
+
+    @app.get("/api/match-changes", response_model=MatchChangePage)
+    def match_changes(
+        repository: RepositoryDependency,
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+        limit: Limit = 50,
+        offset: Offset = 0,
+    ) -> MatchChangePage:
+        items, total = repository.match_changes(
+            competition_season_id=competition_season_id,
+            limit=limit,
+            offset=offset,
+        )
+        return MatchChangePage(items=items, total=total, limit=limit, offset=offset)
 
     @app.get("/api/sync-checkpoints", response_model=list[SyncCheckpoint])
     def sync_checkpoints(
@@ -189,7 +214,7 @@ def create_app(
         return items
 
     @app.get("/api/matches/{match_id}/notes", response_model=list[Note])
-    def notes(match_id: int, repository: RepositoryDependency):
+    def notes(match_id: PositiveId, repository: RepositoryDependency):
         return repository.notes(match_id)
 
     @app.post(
@@ -199,7 +224,7 @@ def create_app(
         dependencies=[Depends(permit_note_write)],
     )
     def create_note(
-        match_id: int,
+        match_id: PositiveId,
         body: NoteCreate,
         repository: RepositoryDependency,
     ):
@@ -213,7 +238,7 @@ def create_app(
         dependencies=[Depends(permit_note_write)],
     )
     def update_note(
-        note_id: int,
+        note_id: PositiveId,
         body: NoteUpdate,
         repository: RepositoryDependency,
     ):
@@ -228,7 +253,7 @@ def create_app(
         dependencies=[Depends(permit_note_write)],
     )
     def archive_note(
-        note_id: int,
+        note_id: PositiveId,
         repository: RepositoryDependency,
     ) -> Response:
         if not repository.archive_note(note_id):

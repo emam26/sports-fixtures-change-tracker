@@ -54,6 +54,22 @@ class MatchPage(Page):
     items: list[MatchSummary]
 
 
+class DashboardSummary(ApiModel):
+    """Aggregate facts for one loaded competition season or all loaded seasons."""
+
+    total_fixtures: int
+    finished_fixtures: int
+    upcoming_fixtures: int
+    goals_recorded: int
+    # This remains the field-level event count for API compatibility. It is not a
+    # count of distinct fixtures with at least one recorded transition.
+    detected_changes: int
+    changed_fixtures: int
+    latest_successful_sync_at_utc: datetime | None = None
+    latest_successful_snapshot_id: int | None = None
+    latest_successful_import_run_id: int | None = None
+
+
 class Result(ApiModel):
     result_type: str
     result_name: str | None = None
@@ -88,6 +104,22 @@ class MatchChange(ApiModel):
     source_last_update_utc: datetime | None = None
     import_run_id: int
     source_snapshot_id: int
+
+
+class MatchChangeOverview(MatchChange):
+    """A field-level change with enough fixture and snapshot context for the dashboard."""
+
+    match_id: int
+    provider_match_id: int
+    matchday_number: int | None = None
+    home_team: str
+    away_team: str
+    snapshot_sha256: str | None = None
+    snapshot_retrieved_at_utc: datetime | None = None
+
+
+class MatchChangePage(Page):
+    items: list[MatchChangeOverview]
 
 
 class ImportRun(ApiModel):
