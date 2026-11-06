@@ -23,6 +23,70 @@ python scripts/run_api.py --host 127.0.0.1 --port 8000
 Expected: Uvicorn listens only on `http://127.0.0.1:8000`. Verify `/health`, `/docs`,
 and `/` in the browser, then stop with Ctrl+C. A non-loopback `--host` must be refused.
 
+## Dashboard verification
+
+Where: browser on the same machine.  
+Base address: `http://127.0.0.1:8000`
+
+After any source edit, stop and restart the non-reload Uvicorn process, then open `/`
+and perform a hard reload. Expected: the page immediately shows a styled overview,
+match explorer, change-intelligence feed, and import/sync monitor with loading text
+rather than a blank content area. In browser developer tools, confirm
+`/assets/styles.css` and `/assets/app.js` each return `200`.
+
+Then verify the following against only real local records:
+
+1. The competition selector is populated from `/api/competitions`; selecting a season
+   refreshes the summary, matchdays, fixtures, and change feed.
+2. Overview cards show fixture, finished, upcoming, goal-event, and field-change-event
+   counts. Confirm the field-change card also names the distinct number of affected
+   fixtures; do not describe the event total as a count of changed matches. The latest
+   successful checkpoint names a snapshot/import-run ID only when present.
+3. Team search, matchday/status filters, kickoff order, and Clear change the fixture
+   board without fabricated scores. Future scores must display `Not supplied`.
+4. An empty search result renders a clear no-records state. With developer tools set
+   to offline after the page has loaded, use a refresh button and confirm a visible,
+   non-secret API error panel appears.
+5. The change feed shows before/after values, observation times, and snapshot IDs/hash
+   fragments when changes exist; otherwise it explicitly says no observed changes.
+   When the total exceeds one page, Previous and Next fetch the adjacent API page;
+   changing competition or clearing filters returns to the first page.
+6. Open a fixture detail, verify typed results/goals, provenance, nullable scores, and
+   visible local-note write state. Do not enter or screenshot a token unless note
+   writes were deliberately enabled locally.
+7. At a narrow viewport and with keyboard-only navigation, confirm focus indicators,
+   section links, filters, buttons, and the detail dialog are usable.
+   Confirm missing or invalid kickoff timestamps stay last in both kickoff orders.
+   Rapidly change the competition, matchday, and search filters; the final selection
+   must remain rendered rather than being overwritten by an earlier response or
+   triggering a stale follow-on request.
+8. Confirm browser developer tools reports no `/favicon.ico` 404. The page uses an
+   inline favicon and must not make a separate favicon request.
+
+The browser displays UTC API timestamps in its local timezone. A missing or changing
+provider `source_time_zone_id` must not be used to infer an offset, and an ambiguous
+source update time must remain absent/unconverted rather than being presented as a
+precise local timestamp.
+
+Stop and return the failing browser console message or non-secret network response if
+an asset fails to load, an API response is malformed, or a panel remains in its loading
+state. Do not expose the service beyond loopback while diagnosing it.
+
+### Dashboard API audit check
+
+Where: WSL Bash, project directory, while the local API is running.
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:8000/api/dashboard-summary
+```
+
+Expected: a `200` JSON object with fixture, finished, upcoming, goal, field-change
+event (`detected_changes`), and distinct affected-fixture (`changed_fixtures`) counts,
+plus nullable latest-checkpoint fields. Stop if this returns HTTP 500; return
+only the non-secret server log line containing `Dashboard summary read failed` and its
+operation/error type. Do not return SQL parameters, a connection string, or `.env`
+content.
+
 ## One-shot synchronization wrapper
 
 Where: WSL Bash, same directory. This performs real HTTP and SQL operations.

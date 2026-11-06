@@ -21,13 +21,13 @@ is currently implemented or claimed.
 | 0 - foundation | src package, configuration, SQL connection, tooling | Owner verified |
 | 1 - source capture | bounded client, contract checks, immutable raw snapshots | Owner verified on MD3/MD4 |
 | 2 - SQL schema | 12-table SQL Server schema | Owner reports deployed |
-| 3 - typed import | validation, upserts, provenance, changes, rollback, checkpoints | First MD3 import verified; replay/MD4 pending |
+| 3 - typed import | validation, upserts, provenance, changes, rollback, checkpoints | MD3/MD4 current data verified; latest audit not run |
 | 4 - offline replay/evaluation | dry-run and deterministic evaluation CLIs | Prior dry run verified; latest edits not run |
-| 5 - incremental synchronization | last-change decision, retries, lock, logs, partial failures | Latest implementation not run |
-| 6 - local FastAPI | status, discovery, fixtures, history, operations, notes | Latest implementation not run |
-| 7 - browser dashboard | filters, detail, operations, optional notes | Not run in browser |
+| 5 - incremental synchronization | last-change decision, retries, lock, logs, partial failures | Initial/repeat manual sync verified; latest audit not run |
+| 6 - local FastAPI | status, discovery, fixtures, history, operations, notes | Owner verified read-only endpoint responses; latest audit not run |
+| 7 - browser dashboard | filters, detail, operations, optional notes | Browser visual audit remains pending after latest changes |
 | 8 - one-shot scheduling support | WSL wrapper and Task Scheduler handoff | No task registered or activated |
-| 9 - test/evaluation framework | offline, mocked, repository, SQL-gated plans | Latest suite not run |
+| 9 - test/evaluation framework | offline, mocked, repository, SQL-gated plans | 85 non-SQL passed / 1 deselected before latest audit |
 | 10 - portfolio documentation | architecture, API, testing, evaluation, runbook | Updated; owner review pending |
 
 No release-readiness command was executed during the 2026-11-06 audit. Static
@@ -112,6 +112,139 @@ test's empty event list. The CLI now maps the validated settings to the
 corresponding `RetryPolicy` fields, and the regression test captures and verifies
 that policy before asserting both lifecycle events and the non-zero partial-failure
 exit. These corrections are NOT RUN pending owner verification.
+
+### 2026-11-06 dashboard completion follow-up
+
+The owner reported that opening the local root page showed little more than headings.
+Static inspection found no broken FastAPI root route, asset mount, package-data rule,
+or HTML/JavaScript selector mismatch: `/` returns the packaged web index and
+`/assets` mounts that same directory. The practical failure mode was a sparse,
+JavaScript-dependent presentation with blank data containers and insufficiently
+prominent API failure states, not evidence of a static-path repair.
+
+The dashboard was therefore completed rather than cosmetically patched:
+
+- a visible, responsive four-section shell is present before API data resolves;
+- a new read-only dashboard-summary route supplies real fixture, finished/upcoming,
+  goal-event, change, and latest committed-checkpoint metrics;
+- a paged cross-fixture change route supplies real before/after values and source
+  snapshot provenance without one browser request per fixture;
+- the match explorer keeps API filters, adds client-side kickoff ordering, preserves
+  nullable future scores, and exposes typed detail, goals, change history, and local
+  notes;
+- operational records continue to distinguish captured source evidence from a
+  successful import/checkpoint; and
+- API/static-asset/repository contract tests now cover the new routes and dashboard
+  entry assets.
+
+No schema, raw snapshot, SQL Server data, `.env`, server process, browser check, or
+test was run for this implementation. The dashboard and all added tests are **NOT
+RUN** pending owner verification.
+
+### 2026-11-06 owner-supplied post-sync evidence
+
+The owner subsequently verified the following operational facts. This evidence applies
+to the working tree before the audit edits below and does not verify those edits:
+
+- 36 distinct UCL fixtures are loaded and all are marked finished;
+- 72 typed result rows and 144 goal rows are present;
+- 936 records are field-level `match_changes` events resulting from Matchday 4
+  completion. They are not 936 distinct changed fixtures;
+- an initial synchronization and an unchanged repeat synchronization succeeded, with
+  the repeat producing no false business changes;
+- `/api/dashboard-summary`, `/api/matches`, `/api/match-changes`, `/api/import-runs`,
+  `/api/validation-issues`, and `/api/sync-checkpoints` each returned HTTP `200`;
+- the SQL Server integration test passed and the database connection succeeded; and
+- the prior non-SQL suite reported 85 passed and one deselected test.
+
+The existing source policy remains deliberate: the observed provider
+`source_time_zone_id` transition from `W. Europe Standard Time` to `NULL` is retained
+as source metadata, and a last-change value without an offset is not promoted to UTC.
+The synchronizer conservatively performs a full retrieval rather than skipping on an
+ambiguous timestamp. No timezone offset is invented.
+
+### 2026-11-06 local dashboard HTTP audit follow-up
+
+Browser automation is not available in the editing environment, so no browser
+screenshot, JavaScript-console inspection, or click-through claim is made. A permitted
+read-only localhost audit of the already-running API did establish the following
+pre-edit facts:
+
+- `/`, `/assets/styles.css`, `/assets/app.js`, and `/openapi.json` each returned HTTP
+  `200` with the expected content type;
+- `/health` reported the database available, and competition discovery, fixtures,
+  match detail, change feed, import-run, checkpoint, validation-issue, and read-only
+  note endpoints returned data or an intentional empty response; and
+- `/api/dashboard-summary`, both with and without the loaded competition-season ID,
+  returned the generic HTTP `500` response.
+
+This rules out a missing static mount as the observed source of the sparse page. Source
+inspection isolated the live failure to the dashboard aggregate query, whose CTE/scalar
+subquery formulation was not covered by a real SQL Server API check. It has been
+replaced with small, parameterized reads using the same deployed tables exercised by
+the working endpoints. Failures now produce a local operation name and exception type
+without logging sensitive SQL or configuration data. The current server was not
+restarted after this edit, so the repaired endpoint, browser behavior, and tests remain
+**NOT RUN**.
+
+The dashboard now also has real cross-fixture change pagination using the existing
+`limit`/`offset` API contract, responsive pagination controls, and a new asset cache
+version. Static/API/repository tests were extended for these contracts; they are also
+**NOT RUN**.
+
+Files changed during the initial dashboard completion before this HTTP audit:
+
+- `src/sports_tracker/api/models.py`
+- `src/sports_tracker/api/repository.py`
+- `src/sports_tracker/api/app.py`
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `tests/test_api.py`
+- `tests/test_api_repository.py`
+- `docs/API.md`
+- `docs/ARCHITECTURE.md`
+- `docs/BUILD_PLAN.md`
+- `docs/DEPLOYMENT_LOCAL.md`
+- `docs/MANUAL_RUNBOOK.md`
+- `docs/TESTING.md`
+
+Files additionally changed in the local dashboard HTTP audit follow-up:
+
+- `src/sports_tracker/api/repository.py`
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `tests/test_api.py`
+- `tests/test_api_repository.py`
+- `docs/API.md`
+- `docs/BUILD_PLAN.md`
+- `docs/DEPLOYMENT_LOCAL.md`
+- `docs/TESTING.md`
+
+### Current full-stack audit implementation (NOT RUN)
+
+The current audit corrected the dashboard's field-change metric semantics, added an
+affected-fixture count, added non-positive path-ID validation, eliminated a known
+favicon request, and added latest-request-wins guards for overview, fixture,
+matchday, detail, change, and operational reads. Change-page bounds and null-kickoff
+ordering were also made deterministic. No test, Ruff check, API restart, browser
+check, SQL operation, sync, or Git action was run for these changes.
+
+Files changed for this audit:
+
+- `src/sports_tracker/api/app.py`
+- `src/sports_tracker/api/models.py`
+- `src/sports_tracker/api/repository.py`
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `tests/test_api.py`
+- `tests/test_api_repository.py`
+- `docs/API.md`
+- `docs/BUILD_PLAN.md`
+- `docs/DEPLOYMENT_LOCAL.md`
+- `docs/TESTING.md`
 
 ## Release-readiness implementation audit
 
@@ -215,22 +348,34 @@ are in `docs/MANUAL_RUNBOOK.md`.
 
 ## Current blocker and next manual step
 
-Verification of the synchronization CLI correction is the current blocker. Where:
-WSL Bash. Working directory: `/mnt/f/sports-fixtures-change-tracker`.
+Verification of the synchronization CLI correction and completed dashboard is the
+current blocker. Where: WSL Bash. Working directory:
+`/mnt/f/sports-fixtures-change-tracker`.
 
 ```bash
 source .venv/bin/activate
+python scripts/run_api.py --host 127.0.0.1 --port 8000
+```
+
+In a second WSL Bash terminal in the same directory, verify the repaired aggregate
+route before browser work:
+
+```bash
+source .venv/bin/activate
+curl --fail --silent --show-error http://127.0.0.1:8000/api/dashboard-summary
 python -m pytest \
   tests/test_sync_cli.py::test_sync_cli_returns_nonzero_after_partial_failure -q
+python -m pytest tests/test_api.py tests/test_api_repository.py -q
 ruff check .
 ruff format --check .
 python -m pytest -q -m "not sqlserver"
 ```
 
-Expected: the focused regression test passes, both Ruff commands exit zero, and the
-complete selected offline suite has no failures. Stop at the first failure and
-return the complete non-secret diagnostic. Do not run a live synchronization pass
-until this gate passes.
+Expected: both focused test groups pass, both Ruff commands exit zero, and the
+complete selected offline suite has no failures. The `curl` route must return HTTP
+`200` JSON rather than the pre-edit `500`. Then follow the browser procedure in
+`docs/DEPLOYMENT_LOCAL.md`. Stop at the first failure and return the complete
+non-secret diagnostic. Do not run a live synchronization pass until this gate passes.
 
 ## Remaining limitations
 

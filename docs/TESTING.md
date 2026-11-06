@@ -1,8 +1,8 @@
 # Testing strategy
 
-Status: all tests added or changed in the 2026-11-06 audit are **NOT RUN**. The last
-owner-supplied baseline before this audit was 56 passing non-SQL tests; it does not
-verify the current working tree.
+Status: all tests added or changed in the latest audit are **NOT RUN**. The last
+owner-supplied baseline before these changes was 85 passing non-SQL tests and one
+deselected SQL Server test; it does not verify the current working tree.
 
 ## Offline default suite
 
@@ -32,10 +32,16 @@ covers:
 - overlap locking, deployed-schema checkpoint lookup, conservative last-change
   fallback, canonical sync capture, continuation after a partial failure, duplicate
   matchday rejection, and non-zero partial-failure CLI exit;
-- API validation, nullable score serialization, generic failure responses, note
-  authorization/update/archive, and status/matchday/checkpoint routes;
-- repository SQL mapping against the actual deployed table/column names and note
-  transaction behavior;
+- API validation (including non-positive resource IDs), nullable score serialization,
+  generic failure responses, note authorization/update/archive, status/matchday/
+  checkpoint routes, dashboard summary event-versus-fixture counts, and paged
+  cross-fixture change provenance;
+- dashboard HTML/static asset serving, summary/change response contracts, and
+  change-feed pagination controls, stale-response guards, deterministic null-kickoff
+  ordering, and favicon declaration, alongside the browser-only loading, empty,
+  failure, keyboard, and narrow-layout checks in the manual runbook;
+- repository SQL mapping against the actual deployed table/column names, dashboard
+  aggregate/change queries, and note transaction behavior;
 - CLI configuration propagation for offline snapshot evaluation.
 
 HTTP tests use `httpx.MockTransport`. Import unit tests use an in-memory transactional
@@ -79,10 +85,12 @@ offline suite and read-only schema check pass, manually verify:
 - exact Matchday 3 replay leaves match/result/goal/change counts unchanged;
 - Matchday 4 adds 18 unfinished matches and no fabricated result/goal rows;
 - import runs and checkpoints reference the expected snapshot/run IDs;
-- `/health`, `/api/competitions`, `/api/matchdays`, `/api/matches`, match detail,
-  `/api/sync-checkpoints`, import runs, and validation issues return successfully;
+- `/health`, `/api/competitions`, `/api/matchdays`, `/api/dashboard-summary`,
+  `/api/matches`, match detail, `/api/match-changes`, `/api/sync-checkpoints`, import
+  runs, and validation issues return successfully;
 - the browser handles loading, empty, error, nullable score, narrow-screen, and
-  keyboard-focus states;
+  keyboard-focus states, including change-feed Previous/Next controls when more than
+  one page of observed changes exists;
 - note writes return 403 by default and work only with an enabled local token.
 
 Follow [MANUAL_RUNBOOK.md](MANUAL_RUNBOOK.md) for the ordered commands and SQL.
