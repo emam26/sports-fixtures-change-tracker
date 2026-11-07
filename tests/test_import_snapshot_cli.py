@@ -8,6 +8,18 @@ import pyodbc
 from scripts import import_snapshot
 
 
+def test_import_parser_exposes_explicit_conflict_recovery_option(tmp_path: Path) -> None:
+    args = import_snapshot.build_parser().parse_args(
+        [
+            "--snapshot",
+            str(tmp_path / "snapshot"),
+            "--allow-conflicting-nonfinal-results",
+        ]
+    )
+
+    assert args.allow_conflicting_nonfinal_results is True
+
+
 def test_connection_failure_is_reported_without_driver_details(
     tmp_path: Path,
     monkeypatch,

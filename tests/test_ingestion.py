@@ -153,6 +153,46 @@ def _record(
     return record
 
 
+def _conflicting_halftime_record(
+    *,
+    final_score: tuple[int, int] = (3, 3),
+) -> dict[str, Any]:
+    record = _record(match_id=87412, final_score=final_score)
+    record["matchResults"] = [
+        {
+            "resultID": 129519,
+            "resultName": "Halftime",
+            "pointsTeam1": 2,
+            "pointsTeam2": 0,
+            "resultOrderID": 1,
+            "resultTypeID": 1,
+            "resultTypeKind": "HalfTime",
+            "resultDescription": "Half-time result",
+        },
+        {
+            "resultID": 129520,
+            "resultName": "Halftime",
+            "pointsTeam1": 0,
+            "pointsTeam2": 0,
+            "resultOrderID": 1,
+            "resultTypeID": 1,
+            "resultTypeKind": "HalfTime",
+            "resultDescription": "Half-time result",
+        },
+        {
+            "resultID": 129521,
+            "resultName": "Final",
+            "pointsTeam1": final_score[0],
+            "pointsTeam2": final_score[1],
+            "resultOrderID": 2,
+            "resultTypeID": 2,
+            "resultTypeKind": "After90Minutes",
+            "resultDescription": "Official-time result",
+        },
+    ]
+    return record
+
+
 def _write_snapshot(
     tmp_path: Path,
     records: list[dict[str, Any]],
@@ -427,7 +467,12 @@ class MemoryStore:
         key = (parsed.metadata.provider, parsed.metadata.matchday)
         self.state["checkpoints"][key] = (source_snapshot_id, import_run_id)
 
-    def record_failed_run(self, parsed: ParsedSnapshot, error_summary: str) -> None:
+    def record_failed_run(
+        self,
+        parsed: ParsedSnapshot,
+        error_summary: str,
+        issues: tuple[ValidationIssue, ...] = (),
+    ) -> None:
         self.failed_run_attempts += 1
         snapshot_id = self.ensure_snapshot(parsed)
         competition_id = self.ensure_competition(
@@ -441,7 +486,7 @@ class MemoryStore:
         previous = self.find_successful_run(snapshot_id)
         run_id = self.start_run(parsed, season_id, snapshot_id, previous is not None, previous)
         issue = ValidationIssue("database-import-failure", error_summary, "Error")
-        self.record_issues(run_id, snapshot_id, (issue,))
+        self.record_issues(run_id, snapshot_id, (*issues, issue))
         self.finish_run(
             run_id,
             "Failed",
@@ -512,6 +557,137 @@ def test_load_snapshot_parses_observed_results_and_goals(tmp_path: Path) -> None
     assert parsed.matches[0].results[1].result_type_kind == "After90Minutes"
     assert len(parsed.matches[0].goals) == 3
     assert parsed.matches[0].goals[-1].score_team1 == 2
+
+
+def test_conflicting_nonfinal_results_are_strictly_rejected_by_default(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    directory = _write_snapshot(
+        tmp_path,
+        [_conflicting_halftime_record()],
+        matchday=2,
+    )
+    original_response = (directory / "response.json").read_bytes()
+
+    parsed = load_snapshot(directory, settings)
+
+    assert parsed.matches == ()
+    issue = next(issue for issue in parsed.issues if issue.code == "duplicate-result-type")
+    assert issue.source_record_type == "result"
+    assert "129519" in issue.message and "2-0" in issue.message
+    assert "129520" in issue.message and "0-0" in issue.message
+    assert issue.source_value == "resultID 129519: 2-0; resultID 129520: 0-0"
+    assert (directory / "response.json").read_bytes() == original_response
+
+
+def test_enabled_recovery_quarantines_conflict_and_imports_valid_final_score(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    directory = _write_snapshot(
+        tmp_path,
+        [_conflicting_halftime_record()],
+        matchday=2,
+    )
+    original_response = (directory / "response.json").read_bytes()
+
+    parsed = load_snapshot(
+        directory,
+        settings,
+        allow_conflicting_nonfinal_results=True,
+    )
+
+    assert parsed.errors == ()
+    fixture = parsed.matches[0]
+    assert [(result.provider_result_id, result.result_type_kind) for result in fixture.results] == [
+        (129521, "After90Minutes")
+    ]
+    assert [result.provider_result_id for result in fixture.quarantined_results] == [
+        129519,
+        129520,
+    ]
+    issue = next(
+        issue for issue in parsed.issues if issue.code == "conflicting-nonfinal-result-quarantined"
+    )
+    assert issue.severity == "Warning"
+    assert issue.source_record_type == "result"
+    assert "129519" in issue.message and "2-0" in issue.message
+    assert "129520" in issue.message and "0-0" in issue.message
+    assert (directory / "response.json").read_bytes() == original_response
+
+    store = MemoryStore()
+    summary = SnapshotImportProcessor(store).import_snapshot(parsed)
+
+    assert summary.status == "Succeeded"
+    assert summary.results_seen == 3
+    assert len(store.state["results"]) == 1
+    assert next(iter(store.state["results"].values())).fields["points_team1"] == 3
+    assert len(store.state["issues"]) == 1
+
+
+def test_enabled_recovery_rejects_conflict_when_final_score_fails_validation(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    record = _conflicting_halftime_record()
+    record["goals"][-1]["scoreTeam1"] = 2
+    record["goals"][-1]["scoreTeam2"] = 2
+    directory = _write_snapshot(tmp_path, [record], matchday=2)
+
+    parsed = load_snapshot(
+        directory,
+        settings,
+        allow_conflicting_nonfinal_results=True,
+    )
+    assert any(issue.code == "result-goal-score-mismatch" for issue in parsed.errors)
+
+    store = MemoryStore()
+    failed_summary = SnapshotImportProcessor(store).import_snapshot(parsed)
+    assert failed_summary.status == "Failed"
+    assert store.state["teams"] == {}
+    assert store.state["matches"] == {}
+    assert store.state["results"] == {}
+    assert store.state["goals"] == {}
+    assert store.state["changes"] == []
+    assert store.state["checkpoints"] == {}
+    assert len(store.state["snapshots"]) == 1
+    assert [run["status"] for run in store.state["runs"]] == ["Failed"]
+    assert any(
+        issue.code == "conflicting-nonfinal-result-quarantined"
+        for _, _, issue in store.state["issues"]
+    )
+
+
+def test_enabled_recovery_replay_is_idempotent_and_preserves_quarantine_audit(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    directory = _write_snapshot(
+        tmp_path,
+        [_conflicting_halftime_record()],
+        matchday=2,
+    )
+    parsed = load_snapshot(
+        directory,
+        settings,
+        allow_conflicting_nonfinal_results=True,
+    )
+    store = MemoryStore()
+    processor = SnapshotImportProcessor(store)
+
+    first = processor.import_snapshot(parsed)
+    replay = processor.import_snapshot(parsed)
+
+    assert first.status == "Succeeded"
+    assert replay.status == "Succeeded"
+    assert first.results_seen == replay.results_seen == 3
+    assert len(store.state["snapshots"]) == 1
+    assert len(store.state["matches"]) == 1
+    assert len(store.state["results"]) == 1
+    assert len(store.state["goals"]) == 3
+    assert store.state["changes"] == []
+    assert len(store.state["issues"]) == 2
 
 
 def test_team_icon_url_preserves_schema_safe_http_url(tmp_path: Path) -> None:

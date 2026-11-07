@@ -39,6 +39,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate and summarize the snapshot without opening SQL Server",
     )
+    parser.add_argument(
+        "--allow-conflicting-nonfinal-results",
+        action="store_true",
+        help=(
+            "quarantine conflicting HalfTime variants for this manual snapshot only; "
+            "never selects a provider variant"
+        ),
+    )
     return parser
 
 
@@ -55,7 +63,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         source_settings = load_openligadb_settings()
-        parsed = load_snapshot(args.snapshot, source_settings)
+        if args.allow_conflicting_nonfinal_results:
+            parsed = load_snapshot(
+                args.snapshot,
+                source_settings,
+                allow_conflicting_nonfinal_results=True,
+            )
+        else:
+            parsed = load_snapshot(args.snapshot, source_settings)
     except (ConfigurationError, SnapshotValidationError, OSError) as exc:
         print(f"Snapshot import failed: {exc}", file=sys.stderr)
         return 2

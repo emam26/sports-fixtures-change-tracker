@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -20,6 +20,7 @@ from .openligadb import build_matchday_url
 _LOGGER = logging.getLogger(__name__)
 
 TEAM_ICON_URL_MAX_LENGTH = 2048
+RECOVERABLE_NONFINAL_RESULT_KIND = "HalfTime"
 
 
 class SnapshotValidationError(ValueError):
@@ -40,6 +41,7 @@ class ValidationIssue:
     source_record_id: str | None = None
     field_name: str | None = None
     source_value: str | None = None
+    source_record_type: str = "match"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +123,7 @@ class FixtureData:
     location: str | None
     results: tuple[ResultData, ...]
     goals: tuple[GoalData, ...]
+    quarantined_results: tuple[ResultData, ...] = ()
 
     def business_fields(self) -> dict[str, Any]:
         """Return source-owned fields used for current-record comparison."""
@@ -293,7 +296,12 @@ class ImportStore(Protocol):
         import_run_id: int,
     ) -> None: ...
 
-    def record_failed_run(self, parsed: ParsedSnapshot, error_summary: str) -> None: ...
+    def record_failed_run(
+        self,
+        parsed: ParsedSnapshot,
+        error_summary: str,
+        issues: Sequence[ValidationIssue] = (),
+    ) -> None: ...
 
 
 def _utc_datetime(value: Any, field_name: str) -> datetime:
@@ -337,6 +345,7 @@ def _issue(
     field_name: str | None = None,
     source_value: Any = None,
     severity: str = "Error",
+    source_record_type: str = "match",
 ) -> None:
     issues.append(
         ValidationIssue(
@@ -346,6 +355,7 @@ def _issue(
             source_record_id=record_id,
             field_name=field_name,
             source_value=None if source_value is None else str(source_value)[:4000],
+            source_record_type=source_record_type,
         )
     )
 
@@ -630,9 +640,8 @@ def _validate_scores(
         (result for result in fixture.results if result.result_type_kind == "After90Minutes"),
         None,
     )
-    halftime_result = next(
-        (result for result in fixture.results if result.result_type_kind == "HalfTime"),
-        None,
+    halftime_results = tuple(
+        result for result in fixture.results if result.result_type_kind == "HalfTime"
     )
     if fixture.match_is_finished and final_result is None:
         _issue(
@@ -644,21 +653,29 @@ def _validate_scores(
         )
     if (
         final_result is not None
-        and halftime_result is not None
         and final_result.points_team1 is not None
-        and halftime_result.points_team1 is not None
-        and (
-            halftime_result.points_team1 > final_result.points_team1
-            or halftime_result.points_team2 > final_result.points_team2
-        )
+        and final_result.points_team2 is not None
     ):
-        _issue(
-            issues,
-            "halftime-score-exceeds-final",
-            "half-time scores cannot exceed the corresponding final scores",
-            record_id,
-            "matchResults",
-        )
+        for halftime_result in halftime_results:
+            if halftime_result.points_team1 is None or halftime_result.points_team2 is None:
+                continue
+            if (
+                halftime_result.points_team1 > final_result.points_team1
+                or halftime_result.points_team2 > final_result.points_team2
+            ):
+                _issue(
+                    issues,
+                    "halftime-score-exceeds-final",
+                    "half-time scores cannot exceed the corresponding final scores",
+                    record_id,
+                    "matchResults",
+                    source_value=(
+                        f"resultID {halftime_result.provider_result_id}: "
+                        f"{halftime_result.points_team1}-{halftime_result.points_team2}; "
+                        f"final {final_result.points_team1}-{final_result.points_team2}"
+                    ),
+                    source_record_type="result",
+                )
 
     previous_score: tuple[int, int] | None = None
     has_overtime_goal = any(goal.is_overtime is True for goal in fixture.goals)
@@ -706,6 +723,7 @@ def _parse_fixture(
     settings: OpenLigaDBSettings,
     matchday: int,
     issues: list[ValidationIssue],
+    allow_conflicting_nonfinal_results: bool,
 ) -> FixtureData | None:
     record_id = _record_id(record)
     match_id = _required_int(record, "matchID", issues, record_id)
@@ -777,6 +795,7 @@ def _parse_fixture(
 
     results_value = record.get("matchResults")
     results: list[ResultData] = []
+    results_by_type: dict[str, list[ResultData]] = {}
     if not isinstance(results_value, list):
         _issue(
             issues,
@@ -787,7 +806,6 @@ def _parse_fixture(
         )
     else:
         seen_result_ids: set[int] = set()
-        seen_result_types: set[str] = set()
         for result_value in results_value:
             result = _parse_result(result_value, issues, record_id)
             if result is None:
@@ -800,17 +818,47 @@ def _parse_fixture(
                     record_id,
                     "resultID",
                 )
-            if result.result_type_kind in seen_result_types:
-                _issue(
-                    issues,
-                    "duplicate-result-type",
-                    "a match cannot contain duplicate result type kinds",
-                    record_id,
-                    "resultTypeKind",
-                )
             seen_result_ids.add(result.provider_result_id)
-            seen_result_types.add(result.result_type_kind)
             results.append(result)
+            results_by_type.setdefault(result.result_type_kind, []).append(result)
+
+    quarantined_results: list[ResultData] = []
+    for result_type_kind, matching_results in results_by_type.items():
+        if len(matching_results) < 2:
+            continue
+        details = "; ".join(
+            f"resultID {result.provider_result_id}: {result.points_team1}-{result.points_team2}"
+            for result in matching_results
+        )
+        if (
+            allow_conflicting_nonfinal_results
+            and result_type_kind == RECOVERABLE_NONFINAL_RESULT_KIND
+        ):
+            _issue(
+                issues,
+                "conflicting-nonfinal-result-quarantined",
+                (
+                    f"conflicting {result_type_kind} results were quarantined; "
+                    "no provider variant was selected: "
+                    f"{details}"
+                ),
+                record_id,
+                "matchResults",
+                details,
+                severity="Warning",
+                source_record_type="result",
+            )
+            quarantined_results.extend(matching_results)
+            continue
+        _issue(
+            issues,
+            "duplicate-result-type",
+            f"a match cannot contain duplicate result type kinds: {details}",
+            record_id,
+            "resultTypeKind",
+            details,
+            source_record_type="result",
+        )
 
     goals_value = record.get("goals")
     goals: list[GoalData] = []
@@ -874,15 +922,7 @@ def _parse_fixture(
                 goal.scoring_team_provider_id,
             )
 
-    if (
-        match_id is None
-        or competition_name is None
-        or home_team is None
-        or away_team is None
-        or any(
-            issue.severity == "Error" and issue.source_record_id == record_id for issue in issues
-        )
-    ):
+    if match_id is None or competition_name is None or home_team is None or away_team is None:
         return None
 
     fixture = FixtureData(
@@ -905,6 +945,17 @@ def _parse_fixture(
     _validate_scores(fixture, issues, record_id)
     if any(issue.severity == "Error" and issue.source_record_id == record_id for issue in issues):
         return None
+    quarantined_ids = {result.provider_result_id for result in quarantined_results}
+    if quarantined_ids:
+        fixture = replace(
+            fixture,
+            results=tuple(
+                result
+                for result in fixture.results
+                if result.provider_result_id not in quarantined_ids
+            ),
+            quarantined_results=tuple(quarantined_results),
+        )
     return fixture
 
 
@@ -982,7 +1033,12 @@ def _read_metadata(path: Path) -> SnapshotMetadata:
     )
 
 
-def load_snapshot(path: str | Path, settings: OpenLigaDBSettings) -> ParsedSnapshot:
+def load_snapshot(
+    path: str | Path,
+    settings: OpenLigaDBSettings,
+    *,
+    allow_conflicting_nonfinal_results: bool = False,
+) -> ParsedSnapshot:
     """Read and validate one immutable local response snapshot."""
 
     directory = _snapshot_directory(path)
@@ -1049,7 +1105,13 @@ def load_snapshot(path: str | Path, settings: OpenLigaDBSettings) -> ParsedSnaps
     matches: list[FixtureData] = []
     for record in records:
         assert isinstance(record, dict)
-        fixture = _parse_fixture(record, settings, metadata.matchday, issues)
+        fixture = _parse_fixture(
+            record,
+            settings,
+            metadata.matchday,
+            issues,
+            allow_conflicting_nonfinal_results,
+        )
         match_id = record.get("matchID")
         if isinstance(match_id, int) and not isinstance(match_id, bool):
             if match_id in match_ids:
@@ -1284,8 +1346,8 @@ class SnapshotImportProcessor:
                     else:
                         matches_unchanged += 1
 
+                results_seen += len(fixture.results) + len(fixture.quarantined_results)
                 for result in fixture.results:
-                    results_seen += 1
                     existing_result = self.store.get_result(match_id, result.provider_result_id)
                     if existing_result is None:
                         self.store.insert_result(match_id, result)
@@ -1412,7 +1474,7 @@ class SnapshotImportProcessor:
                 rollback_succeeded = True
             if rollback_succeeded:
                 try:
-                    self.store.record_failed_run(parsed, error_summary)
+                    self.store.record_failed_run(parsed, error_summary, parsed.issues)
                 except Exception as failed_run_error:
                     _LOGGER.error(
                         "Failed import run could not be recorded%s: %s",
@@ -1641,12 +1703,13 @@ class SQLServerImportStore:
                     source_record_id, field_name, issue_code, severity, issue_message,
                     source_value
                 )
-                VALUES (?, ?, ?, 'match', ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     import_run_id,
                     source_snapshot_id,
                     self.provider,
+                    issue.source_record_type,
                     issue.source_record_id,
                     issue.field_name,
                     issue.code,
@@ -2080,7 +2143,12 @@ class SQLServerImportStore:
                 ),
             )
 
-    def record_failed_run(self, parsed: ParsedSnapshot, error_summary: str) -> None:
+    def record_failed_run(
+        self,
+        parsed: ParsedSnapshot,
+        error_summary: str,
+        issues: Sequence[ValidationIssue] = (),
+    ) -> None:
         """Persist failure provenance only after the caller confirms primary rollback."""
 
         self._operation = "SQLServerImportStore.record_failed_run"
@@ -2105,7 +2173,8 @@ class SQLServerImportStore:
                 previous_run_id,
             )
             issue = ValidationIssue("database-import-failure", error_summary, "Error")
-            self.record_issues(run_id, snapshot_id, (issue,))
+            all_issues = (*issues, issue)
+            self.record_issues(run_id, snapshot_id, all_issues)
             counters = ImportSummary(
                 status="Failed",
                 import_run_id=run_id,
@@ -2118,8 +2187,8 @@ class SQLServerImportStore:
                 results_seen=0,
                 goals_seen=0,
                 changes_recorded=0,
-                validation_issue_count=1,
-                issues=(issue,),
+                validation_issue_count=len(all_issues),
+                issues=all_issues,
             )
             self.finish_run(run_id, "Failed", counters, "database", error_summary)
             self.connection.commit()

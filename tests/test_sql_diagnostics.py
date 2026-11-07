@@ -4,7 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from sports_tracker.ingestion import SQLServerImportStore, SQLServerOperationError, TeamData
+from sports_tracker.ingestion import (
+    SQLServerImportStore,
+    SQLServerOperationError,
+    TeamData,
+    ValidationIssue,
+)
 
 
 class _FailingCursor:
@@ -97,6 +102,27 @@ class _ExistingTeamConnection:
         self.cursor_instance = _ExistingTeamCursor()
 
     def cursor(self) -> _ExistingTeamCursor:
+        return self.cursor_instance
+
+
+class _IssueCursor:
+    def __init__(self) -> None:
+        self.executions: list[tuple[str, tuple[object, ...]]] = []
+
+    def execute(
+        self,
+        statement: str,
+        parameters: tuple[object, ...],
+    ) -> _IssueCursor:
+        self.executions.append((statement, parameters))
+        return self
+
+
+class _IssueConnection:
+    def __init__(self) -> None:
+        self.cursor_instance = _IssueCursor()
+
+    def cursor(self) -> _IssueCursor:
         return self.cursor_instance
 
 
@@ -196,3 +222,24 @@ def test_team_upsert_does_not_erase_existing_safe_icon_when_source_icon_is_omitt
     update_parameters = connection.cursor_instance.executions[1][1]
     assert update_parameters[4] == "https://images.example.test/existing.png"
     assert update_parameters[-1] == 17
+
+
+def test_record_issues_preserves_result_source_record_type() -> None:
+    connection = _IssueConnection()
+    store = SQLServerImportStore(connection)
+    issue = ValidationIssue(
+        code="conflicting-nonfinal-result-quarantined",
+        message="result variants were quarantined",
+        source_record_id="87412",
+        field_name="matchResults",
+        source_value="resultID 129519: 2-0; resultID 129520: 0-0",
+        source_record_type="result",
+        severity="Warning",
+    )
+
+    store.record_issues(14, 17, (issue,))
+
+    parameters = connection.cursor_instance.executions[0][1]
+    assert parameters[3] == "result"
+    assert parameters[4] == "87412"
+    assert parameters[-1] == "resultID 129519: 2-0; resultID 129520: 0-0"
