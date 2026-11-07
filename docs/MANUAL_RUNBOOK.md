@@ -409,6 +409,162 @@ not confuse that current state with the immutable historical capture. The league
 phase backfill changes totals only through separately preserved, validated snapshots;
 do not reuse this 36-fixture baseline as a full-season expectation.
 
+## 8A. Reviewed Matchday 2 conflicting-result recovery
+
+This is a manual, one-snapshot recovery for the reported Matchday 2 source conflict
+in match `87412` (Viking vs FC Bayern München). The strict parser remains the default.
+Do not use the recovery option for an unrelated snapshot or for a source record that
+has not been reviewed. The option quarantines both conflicting `HalfTime` records
+(`129519: 2-0` and `129520: 0-0`); it never chooses one. The unambiguous
+`After90Minutes` record `129521: 3-3` is retained only after the existing result,
+goal, team, identity, and timestamp validation passes.
+
+The raw response and metadata must remain unchanged. The deployed schema requires one
+`match_results` row per result type, so the quarantined source records are preserved
+by the immutable raw snapshot and an auditable `validation_issues` row, not silently
+discarded or forced into a second `HalfTime` row. Synchronization does not enable this
+option automatically.
+
+Where: SSMS or another confirmed SQL Server client. Target database:
+`SportsFixturesTracker` only. First retrieve the exact local directory for source
+snapshot `17`; do not infer it from a filename:
+
+```sql
+USE [SportsFixturesTracker];
+GO
+
+IF DB_NAME() <> N'SportsFixturesTracker'
+    THROW 50000, 'Wrong database selected; stop without changes.', 1;
+
+SELECT source_snapshot_id,
+       provider,
+       matchday_number,
+       local_directory,
+       sha256,
+       byte_count
+FROM dbo.source_snapshots
+WHERE source_snapshot_id = 17;
+```
+
+Return only the non-secret directory, hash, byte count, and matchday. Stop if the
+row is absent, the database name is wrong, or the directory is not the preserved
+Matchday 2 capture. In WSL, set the returned directory manually:
+
+```bash
+export SNAPSHOT_M2='<source_snapshot_id 17 local_directory>'
+```
+
+Where: WSL Bash, project directory. These commands are offline and do not write SQL
+data or call OpenLigaDB. First prove that strict validation still rejects the source
+conflict:
+
+```bash
+python scripts/evaluate_snapshot.py "$SNAPSHOT_M2"
+python scripts/import_snapshot.py --snapshot "$SNAPSHOT_M2" --dry-run
+```
+
+Expected: the strict dry run exits non-zero and reports
+`duplicate-result-type` with both result IDs and values. Stop if the raw response
+hash or the reported conflict differs from the reviewed values.
+
+Now run the explicitly enabled offline recovery validation:
+
+```bash
+python scripts/evaluate_snapshot.py \
+  "$SNAPSHOT_M2" \
+  --allow-conflicting-nonfinal-results
+python scripts/import_snapshot.py \
+  --snapshot "$SNAPSHOT_M2" \
+  --dry-run \
+  --allow-conflicting-nonfinal-results
+```
+
+Expected: the dry run reports warning
+`conflicting-nonfinal-result-quarantined`, names `129519`/`2-0` and
+`129520`/`0-0`, retains one final result `129521`/`3-3`, and reports no validation
+errors. It must not print Base64 data, a password, or a complete connection string.
+Stop if final-vs-goal consistency or any other validation fails.
+
+Before the SQL write, record the response hash without displaying response content:
+
+```bash
+sha256sum "$SNAPSHOT_M2/response.json"
+```
+
+The digest must equal the `sha256` returned by the SSMS query. Only after that review,
+run the one write command:
+
+```bash
+python scripts/import_snapshot.py \
+  --snapshot "$SNAPSHOT_M2" \
+  --allow-conflicting-nonfinal-results
+```
+
+Expected: one successful import for snapshot `17`, `Results observed: 3`, one
+persisted result row for this match, and a warning count including the quarantine
+issue. A replay of the same command is allowed only as an explicit idempotency check;
+it must not add a match, result, goal, or change-history row. A replay may add a new
+warning row tied to its own import-run provenance. Do not rerun aggressively or
+enable the flag for synchronization.
+
+Where: SSMS, same target database. Run these read-only checks after the import:
+
+```sql
+USE [SportsFixturesTracker];
+GO
+
+IF DB_NAME() <> N'SportsFixturesTracker'
+    THROW 50000, 'Wrong database selected; stop without changes.', 1;
+
+SELECT m.provider_match_id,
+       mr.provider_result_id,
+       mr.result_type_kind,
+       mr.points_team1,
+       mr.points_team2
+FROM dbo.matches AS m
+INNER JOIN dbo.match_results AS mr ON mr.match_id = m.match_id
+WHERE m.provider = N'OpenLigaDB'
+  AND m.provider_match_id = 87412
+ORDER BY mr.provider_result_id;
+
+SELECT validation_issue_id,
+       import_run_id,
+       source_snapshot_id,
+       source_record_type,
+       source_record_id,
+       issue_code,
+       severity,
+       issue_message,
+       source_value
+FROM dbo.validation_issues
+WHERE source_snapshot_id = 17
+  AND issue_code = N'conflicting-nonfinal-result-quarantined'
+ORDER BY validation_issue_id;
+
+SELECT import_run_id,
+       status,
+       failure_phase,
+       error_summary,
+       results_seen,
+       validation_issue_count,
+       completed_at_utc
+FROM dbo.import_runs
+WHERE source_snapshot_id = 17
+ORDER BY import_run_id DESC;
+```
+
+Expected for match `87412`: an `After90Minutes` row with `3-3`, no new `HalfTime`
+row from this recovery, and a result-type validation issue containing both source IDs
+and score values. A pre-existing `HalfTime` row from an earlier successful observation
+is not deleted or replaced by this procedure; if the query shows one, stop and review
+its prior provenance before treating the current match as resolved. The raw snapshot
+remains the authority for the two quarantined records.
+If the enabled dry run fails, do not run the write command; return the non-secret
+validation output for diagnosis. If the SQL import fails, verify that no partial
+fixture/result/goal/change/checkpoint rows were committed and that only the normal
+failed-run provenance was recorded. Do not delete or reset existing data as part of
+this recovery.
+
 ## 9. Inspect operations
 
 Where: WSL Bash, project directory.

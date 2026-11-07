@@ -526,3 +526,58 @@ run a live synchronization pass until those gates pass.
 - The API is local-only and uses a single note-write token; it is not a public or
   multi-user security model.
 - No benchmark, screenshot, scheduled run, commit, or push is claimed.
+
+### 2026-11-07 Matchday 2 conflicting-result recovery (NOT RUN)
+
+The reported source conflict is now handled by a narrow, opt-in parser/import path.
+Strict validation remains the default and continues to reject duplicate result-type
+kinds. The reviewed recovery option applies only to duplicate `HalfTime` variants:
+it validates every variant and the unambiguous `After90Minutes` result against the
+existing score, goal, team, identity, and timestamp rules, persists no ambiguous
+half-time row, and records a warning issue containing the provider result IDs and
+score values. The final row is retained only when the independent validations pass.
+
+The raw Matchday 2 snapshot remains immutable. Its conflicting records are preserved
+there and are explicitly quarantined in the parsed fixture plus the persisted
+`validation_issues` provenance record. No schema change was made because the existing
+`match_results` unique constraint permits only one row for a match/result-type kind;
+the recovery policy uses the existing validation/provenance tables safely.
+
+Changed for this recovery:
+
+- `src/sports_tracker/ingestion.py` — opt-in quarantine, independent validation of
+  all conflicting half-time variants, structured quarantine metadata, result-source
+  issue provenance, and truthful observed-result counting.
+- `scripts/import_snapshot.py` and `scripts/evaluate_snapshot.py` — explicit manual
+  recovery flag; synchronization remains strict by default.
+- `tests/test_ingestion.py` — strict rejection, valid final-score recovery, failed
+  recovery, raw-byte preservation, duplicate replay, and rollback/provenance checks.
+- `tests/test_import_snapshot_cli.py`, `tests/test_evaluate_snapshot.py`, and
+  `tests/test_sql_diagnostics.py` — CLI opt-in and SQL issue source-type regression
+  coverage.
+- `docs/ARCHITECTURE.md` and `docs/MANUAL_RUNBOOK.md` — schema rationale, policy,
+  exact offline/SQL review procedure, expected outputs, and stop conditions.
+
+No project code, test, SQL query, import, synchronization pass, network request, or
+Git operation was executed for this change; only read-only inspection was performed.
+The user supplied the current SQL counts and source conflict; those facts remain owner
+evidence, not independently rerun evidence.
+The next manual step is the reviewed 8A procedure in `docs/MANUAL_RUNBOOK.md`.
+
+### 2026-11-07 Public dashboard database-status cleanup (NOT RUN)
+
+Removed the public dashboard's `Database service` / `Database available` indicator,
+including its header container, `/health` browser request, status handler, and
+unused service-status CSS. Football-data requests still render clear API failure
+messages through the existing alert and section states. The accurate Overview
+`Last updated` indicator and the three public sections remain unchanged.
+
+The backend `/health` endpoint, `/api/status` note-write capability check, database
+monitoring, SQL Server data, ingestion, synchronization, snapshots, and credentials
+were not changed. Frontend contract assertions now verify that the removed markup,
+health request, handler, and CSS do not return.
+
+Changed files: `src/sports_tracker/web/index.html`, `src/sports_tracker/web/app.js`,
+`src/sports_tracker/web/styles.css`, `tests/test_api.py`, and this build record.
+No project code, tests, Git commands, SQL, database operations, imports, network
+requests, or servers were executed for this cleanup.

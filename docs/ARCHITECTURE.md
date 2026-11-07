@@ -83,6 +83,16 @@ The typed mapping is based on inspected saved Matchday 3 and 4 responses:
 - goals: `goals[]`, retaining provider ID, scorer fields, minute, cumulative score,
   scoring team, and penalty/own-goal/overtime flags.
 
+The deployed `match_results` table enforces one row per match and result-type kind.
+Therefore the parser rejects duplicate result kinds by default. A narrowly scoped,
+manual recovery flag can quarantine duplicate `HalfTime` variants when every
+variant and the unambiguous `After90Minutes` result still pass the independent
+score and goal consistency checks. No provider variant is selected: the final
+result is retained, the conflicting half-time records remain in the immutable raw
+snapshot, and a `validation_issues` row records the result IDs and score values
+with `source_record_type=result`. Other duplicate kinds and any failed validation
+remain import-blocking errors. Synchronization never enables this recovery flag.
+
 The observed `lastUpdateDateTime` lacks an offset. It is preserved as raw text and is
 not guessed into UTC. A timezone-aware `matchDateTimeUTC` is authoritative for
 kickoff. Future fixtures with an empty result list keep absent/`NULL` scores; zero is
