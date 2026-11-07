@@ -15,6 +15,10 @@ responses, bounded pagination (`limit <= 200`), and generic unhandled-error resp
 | GET | `/api/competitions` | Loaded competition seasons |
 | GET | `/api/matchdays` | Loaded matchday counts and kickoff ranges |
 | GET | `/api/dashboard-summary` | Aggregate fixture, goal, change, and checkpoint facts |
+| GET | `/api/insights/summary` | Season-scoped scoring and result summary |
+| GET | `/api/insights/teams` | Stable provider-team performance summaries |
+| GET | `/api/insights/matchdays` | Matchday goal and result analytics |
+| GET | `/api/insights/teams/{team_id}` | One team summary and recent results |
 | GET | `/api/matches` | Filtered fixture page |
 | GET | `/api/matches/{match_id}` | Fixture, typed results, and goals |
 | GET | `/api/matches/{match_id}/changes` | Field-level observed history |
@@ -42,17 +46,38 @@ the deployed tables. If one component fails, the local server logs only the logi
 operation name and exception type; it never logs SQL parameters, SQL text, connection
 details, tokens, or credentials.
 
+The Insights endpoints accept optional `competition_season_id`. They use only an
+authoritative `After90Minutes` result with two non-null scores on a provider-finished
+fixture. Unfinished fixtures, quarantined/conflicting results, and score-incomplete
+rows are excluded from goal averages and result distributions; a valid `0-0` remains
+valid. `observed_goal_events` counts linked source goal rows separately from the
+full-time score total. Null kickoff values remain null and sort after reliable times.
+
+`/api/insights/teams/{team_id}` interprets `team_id` as the stable provider team ID,
+not an official UEFA standing position. Team responses include home/away splits,
+recent form from the latest five valid completed fixtures, and recent result details.
+Responses also include clean-sheet counts and summary leaders for most goals and
+fewest conceded with their valid-match context. The API does not claim to implement
+UEFA ranking tiebreakers or official standings.
+Empty selections return zero/empty metrics; an unknown loaded team ID returns 404.
+
 `GET /api/matches` accepts `competition_season_id`, `matchday`, `finished`,
-`search`, `limit`, and `offset`. Search wildcard characters are escaped before the
+`search`, `sort`, `limit`, and `offset`. Search wildcard characters are escaped before the
 parameterized `LIKE` query. Scores in match, result, and goal responses are nullable
 because the source can genuinely omit them. The detail response never substitutes a
 half-time value for `After90Minutes`.
 
 Use `finished=false` for Upcoming records, `finished=true` for Completed records, or
-omit the parameter for All matches. Results are ordered by provider kickoff with
-`NULL` kickoffs last, then match identity. A missing kickoff is preserved as `null`;
-clients must present it as unscheduled/to be confirmed rather than inventing a date or
-labelling it postponed without provider evidence.
+omit the parameter for All matches. The default `sort=explorer` order is newest completed
+matches first for a Completed filter, nearest upcoming kickoff first for an Upcoming
+filter, and, for All matches, the five most recent completed matches, then upcoming
+fixtures, then older completed matches. Within every group, known kickoffs precede
+unknown values; kickoff time and stable provider match ID provide deterministic ordering.
+The five-match recent window is an explicit product rule, not a database insertion-order
+assumption. `sort=kickoff-asc` and `sort=kickoff-desc` remain available for callers that
+need a simple global kickoff order. Sorting is applied in SQL before `offset`/`limit`.
+A missing kickoff is preserved as `null`; clients must present it as unscheduled/to be
+confirmed rather than inventing a date or labelling it postponed without provider evidence.
 
 `kickoff_utc`, result timestamps, checkpoint timestamps, and observation timestamps
 are UTC API fields. The dashboard renders those values in the browser's local timezone.
@@ -84,7 +109,8 @@ They remain loopback-only APIs for local diagnostics and the operational CLI.
 
 `GET /` serves the framework-free dashboard. `/assets/app.js` and
 `/assets/styles.css` are mounted from the packaged `sports_tracker.web` directory.
-The public page has three sections: Overview, Match Explorer, and Change Intelligence.
+The public page has four sections in this order: Overview, Match Explorer, Insights, and
+Change Intelligence.
 Overview formats `latest_successful_sync_at_utc` as “Last updated”; this is the latest
 successful synchronization timestamp recorded by the database, not a claim that the
 source was polled more recently. The page has visible loading shells and safe error

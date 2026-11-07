@@ -588,14 +588,20 @@ python scripts/run_api.py --host 127.0.0.1 --port 8000
 
 Expected: Uvicorn listens on `http://127.0.0.1:8000`. Keep that terminal open.
 
+If a dashboard opened before a source update reports HTTP 404 for all `/api/insights/*`
+requests, first stop the old project Uvicorn process with Ctrl+C and rerun this command
+from the current checkout. The verified temporary port-8765 server is separate from port
+8000; changing the frontend to use port 8765 is not a fix. After restart, hard-reload `/`
+and confirm the browser requests the current `/assets/app.js` and `/assets/styles.css`.
+
 Where: browser on the same machine.  
 Base address: `http://127.0.0.1:8000`
 
 1. Open `/health`; expect `status=ok`, `database=available`.
 2. Open `/docs`; inspect the documented status, competition, matchday, fixture,
-   checkpoint, import, validation, and note endpoints.
-3. Open `/` with a hard reload. Confirm the public navigation contains only Overview,
-   Match Explorer, and Change Intelligence. Each section must show a visible loading
+   read-only Insights, checkpoint, import, validation, and note endpoints.
+3. Open `/` with a hard reload. Confirm the public navigation and page order are
+   Overview, Match Explorer, Insights, and Change Intelligence. Each section must show a visible loading
    or data state rather than collapsing into an unexplained blank content area. There
    must be no Import & Sync Monitor link or visible operations cards.
 4. In browser developer tools, confirm `/assets/styles.css` and `/assets/app.js`
@@ -608,24 +614,52 @@ Base address: `http://127.0.0.1:8000`
    updated** matches the latest successful synchronization timestamp returned by
    `/api/dashboard-summary`, or reads `Not recorded` when no such timestamp exists.
    It must not display snapshot/import-run IDs or imply a newer source observation.
-6. Filter by matchday, status, team, and kickoff order; clear filters and confirm
-   recovery. An unmatched team search must show a useful empty state.
-7. Open completed and unfinished fixture details. Confirm future score reads "Not
+6. Open the Insights section. Confirm its cards, matchday goal trend, result split,
+   team comparison, team search/sort, recent-results detail, and highest-scoring
+   completed-match list are populated only from the selected local season. The UI
+   must show an explicit empty/error state when analytics routes fail; it must not
+   invent scores for unfinished fixtures. The source is `After90Minutes` only, valid
+   `0-0` results count, and observed goal-event counts remain distinct from full-time
+   score totals. Confirm the Insights source line uses the latest successful
+   synchronization timestamp or says `Not recorded`, never a browser-generated
+   refresh claim. Select a matchday bar and confirm it moves the Match Explorer to
+   that loaded matchday without fabricating any fixture.
+7. Filter by matchday, status, team, and kickoff order; clear filters and confirm
+   recovery. The recommended All order must show the five most recent completed matches,
+   then nearest upcoming fixtures, then older completed matches. Completed must show
+   newest first and Upcoming nearest first. Known kickoffs must precede missing kickoffs;
+   equal kickoffs must remain deterministic. An unmatched team search must show a useful
+   empty state.
+8. Open completed and unfinished fixture details. Confirm future score reads "Not
    supplied", while completed results retain explicit types and goal events.
-8. Inspect global and per-fixture changes. Confirm related result/goal fields from one
+9. Inspect global and per-fixture changes. Confirm related result/goal fields from one
    observation are grouped into readable events with Inserted, Updated, or Removed
    badges; use the disclosure to inspect mapped field details. Technical field names
    must not be primary labels, inserted records must not read as `Not supplied →
    value`, and long detail histories must scroll vertically without overlapping text.
    Confirm observation/capture times are clearly provenance, not a goal occurrence
    time, and that source snapshot identity appears only for recorded business changes.
-9. Use keyboard-only navigation and a narrow browser width; confirm focus and dialog
+10. Use keyboard-only navigation and a narrow browser width; confirm focus and dialog
    controls remain usable. After the page initially loads, simulate offline mode in
    browser developer tools and use a dashboard refresh button; expect a visible safe
    API error panel rather than silent disappearance.
-10. With default configuration, confirm note-write controls explain that writes are
+11. With default configuration, confirm note-write controls explain that writes are
    disabled and note writes return 403 in `/docs`.
-11. Stop Uvicorn with Ctrl+C.
+12. Stop Uvicorn with Ctrl+C.
+
+For a read-only API smoke check while Uvicorn is running, use WSL Bash in the
+project directory:
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:8000/api/insights/summary
+curl --fail --silent --show-error http://127.0.0.1:8000/api/insights/teams
+curl --fail --silent --show-error http://127.0.0.1:8000/api/insights/matchdays
+```
+
+Expected: HTTP 200 JSON responses. If the selection contains no loaded records,
+zero/empty analytics are valid. To inspect one team, take a `provider_team_id` from
+the teams response and request `/api/insights/teams/{provider_team_id}`; do not
+paste secrets or complete environment configuration into the terminal transcript.
 
 If local note writes are deliberately enabled in `.env`, use a new local token of at
 least 16 characters, restart the API, and test create/edit/archive through the

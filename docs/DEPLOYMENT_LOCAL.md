@@ -30,14 +30,24 @@ Base address: `http://127.0.0.1:8000`
 
 After any source edit, stop and restart the non-reload Uvicorn process, then open `/`
 and perform a hard reload. Expected: the page immediately shows a styled overview,
-match explorer, and change-intelligence feed with loading text rather than a blank
+Insights, match explorer, and change-intelligence feed with loading text rather than a blank
 content area. In browser developer tools, confirm
 `/assets/styles.css` and `/assets/app.js` each return `200`.
+
+The temporary port-8765 analytics check does not update a process already serving port
+8000. If the Insights endpoints return `404` on port 8000 while the current source and
+offline API tests contain the registered routes, the port-8000 Uvicorn process is stale.
+Stop that project process with Ctrl+C, start `scripts/run_api.py` again from this checkout,
+and hard-reload `/`. Do not add a second route or change the frontend to use port 8765.
 
 Then verify the following against only real local records:
 
 1. The competition selector is populated from `/api/competitions`; selecting a season
-   refreshes the summary, matchdays, fixtures, and change feed.
+   refreshes the summary, matchdays, fixtures, Insights, and change feed. The public
+   navigation and page order are Overview, Match Explorer, Insights, then Change
+   Intelligence. Insights
+   remain read-only and do not expose import-run or checkpoint records in the public
+   page.
 2. Overview cards show fixture, finished, upcoming, goal-event, and field-change-event
    counts. Confirm the field-change card also names the distinct number of affected
    fixtures; do not describe the event total as a count of changed matches. The small
@@ -45,7 +55,10 @@ Then verify the following against only real local records:
    synchronization recorded by the database, or `Not recorded` when none exists. It
    must not imply a newer source poll or expose snapshot/import-run identifiers.
 3. Team search, matchday, All matches/Upcoming/Completed filters, kickoff order, and
-   Clear change the fixture board without fabricated scores. Future scores must display
+   Clear change the fixture board without fabricated scores. The recommended All order
+   is the five most recent completed matches, then upcoming fixtures, then older
+   completed matches; Completed and Upcoming use newest and nearest kickoff first.
+   Future scores must display
    `Not supplied`; fixtures without a reliable provider kickoff must remain last and
    read `Kickoff to be confirmed`, not a fabricated date or unsupported postponement.
 4. Overview's Upcoming fixtures panel shows only unfinished local records in
@@ -102,6 +115,19 @@ plus nullable latest-checkpoint fields. Stop if this returns HTTP 500; return
 only the non-secret server log line containing `Dashboard summary read failed` and its
 operation/error type. Do not return SQL parameters, a connection string, or `.env`
 content.
+
+For the read-only analytics layer, also inspect the selected local season:
+
+```bash
+curl --fail --silent --show-error "http://127.0.0.1:8000/api/insights/summary?competition_season_id=1"
+curl --fail --silent --show-error "http://127.0.0.1:8000/api/insights/teams?competition_season_id=1"
+curl --fail --silent --show-error "http://127.0.0.1:8000/api/insights/matchdays?competition_season_id=1"
+```
+
+Replace `1` only with the locally returned `competition_season_id`; do not infer it
+from production claims. Expected responses are JSON with zero/empty metrics when the
+selection has no loaded fixtures. Analytics uses valid `After90Minutes` final scores
+only and does not alter SQL data.
 
 ## One-shot synchronization wrapper
 

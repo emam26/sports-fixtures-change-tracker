@@ -41,16 +41,25 @@ covers:
 - API validation (including non-positive resource IDs), nullable score serialization,
   generic failure responses, note authorization/update/archive, status/matchday/
   checkpoint routes, dashboard summary event-versus-fixture counts, and paged
-  cross-fixture change provenance;
-- dashboard HTML/static asset serving, three-section public navigation, summary/change
+  cross-fixture change provenance; read-only Insights summary, team, matchday, and
+  team-detail response contracts;
+- pure analytics rules for authoritative final scores, valid 0-0 results, unfinished
+  and score-incomplete exclusion, home/away splits, recent form, clean sheets,
+  goal/defensive leaders, and deterministic matchday grouping;
+- dashboard HTML/static asset serving, four-section public navigation, summary/change
   response contracts, accurate Last updated rendering, and absence of operations API
   requests/containers; field-level change provenance, human-readable grouped change
   summaries, absence of raw field-name rendering, change-feed pagination controls,
   stale-response guards, deterministic null-kickoff ordering, and favicon
-  declaration; alongside the browser-only loading, empty, failure, keyboard, and
+  declaration; exact Insights frontend-to-FastAPI route registration; alongside the
+  browser-only loading, empty, failure, keyboard, and
   narrow-layout checks in the manual runbook;
 - All matches/Upcoming/Completed filter contracts, nullable-score upcoming responses,
   deterministic null-kickoff ordering, and Overview's chronological upcoming list;
+- Match Explorer navigation order, server-side completed/upcoming/All ordering, the
+  explicit five-match recent-completed window, null-kickoff placement, provider-ID
+  tie-breakers, sort-before-pagination SQL, and preservation of team/matchday/search
+  filters;
 - repository SQL mapping against the actual deployed table/column names, dashboard
   aggregate/change queries, and note transaction behavior;
 - CLI configuration propagation for offline snapshot evaluation.
@@ -58,6 +67,13 @@ covers:
 HTTP tests use `httpx.MockTransport`. Import unit tests use an in-memory transactional
 store. Repository tests use scripted cursors. None of these substitutes for real
 SQL Server behavior.
+
+The Insights HTTP-404 regression test checks the exact collection and team-detail paths
+registered by FastAPI against the relative paths embedded in the served JavaScript. The
+browser is also expected to receive the version-bumped assets after a source update. A
+stale process on port 8000 remains an operational diagnosis requiring manual restart; it
+is not simulated by the offline suite. The new route-contract test and independent-panel
+failure handling are **NOT RUN**.
 
 ## Static checks
 
@@ -104,7 +120,7 @@ offline suite and read-only schema check pass, manually verify:
 - the browser handles loading, empty, error, nullable score, narrow-screen, and
   keyboard-focus states, including change-feed Previous/Next controls when more than
   one page of observed changes exists, and presents only Overview, Match Explorer,
-  Change Intelligence, plus the timestamp-only Last updated indicator;
+  Insights, Change Intelligence, plus the timestamp-only Last updated indicator;
 - match-detail change history groups related result/goal fields from one observation,
   keeps long histories vertically scrollable, labels inserted/updated/removed events,
   and never presents a snapshot observation timestamp as a goal time;

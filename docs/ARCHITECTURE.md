@@ -178,7 +178,18 @@ Unhandled failures return a generic response and log only the exception type.
 The API provides health/status, competition-season and matchday discovery, a
 season-scoped dashboard aggregate, fixture list/detail, explicit results and goals,
 per-fixture and cross-fixture field changes with source-snapshot provenance, import
-runs, validation issues, synchronization checkpoints, and local-note CRUD.
+runs, validation issues, synchronization checkpoints, local-note CRUD, and a
+read-only analytics surface for season, team, and matchday insights.
+
+Analytics uses a dedicated service over a repository query that returns one row per
+fixture. The query pre-aggregates `match_goals` before joining them, and selects only
+the `After90Minutes` result projection. The service excludes unfinished or
+score-incomplete fixtures from completed-match denominators, retains valid 0-0
+results, and calculates deterministic team home/away splits, recent form, matchday
+trends, result distributions, and highest-scoring completed fixtures. It reports
+observed source goal-event rows separately from score totals and does not implement
+official UEFA standings or tiebreakers. Analytics is read-only and requires no schema
+change.
 
 Note writes are disabled by default. When enabled, they require a separate local
 token. The browser holds that token only in page memory and sends it only in the
@@ -187,15 +198,17 @@ or written to logs. This is a single-machine safety gate, not internet-grade
 authentication. Notes are application-owned and cannot update source fixtures,
 results, goals, changes, snapshots, or checkpoints.
 
-The framework-free public dashboard has three API-backed sections: Overview, Match
-Explorer, and Change Intelligence. Overview presents a small **Last updated** value
+The framework-free public dashboard has four API-backed sections in this order: Overview,
+Match Explorer, Insights, and Change Intelligence. Overview presents a small **Last updated** value
 from `latest_successful_sync_at_utc`; it is the timestamp of the latest successful
 synchronization recorded by the database, not evidence of a more recent source poll.
 It also presents a compact Upcoming fixtures list sourced from unfinished local
 records and ordered by reliable UTC kickoff, with records lacking a kickoff placed
 last and labelled as to be confirmed. The dashboard discovers loaded competition
 seasons and matchdays, filters All matches, Upcoming, and Completed fixture views,
-orders nullable kickoffs deterministically, distinguishes missing scores, presents
+uses SQL-side Match Explorer ordering before pagination (five recent completed fixtures,
+then upcoming, then older completed fixtures for the default All view), orders nullable
+kickoffs deterministically, distinguishes missing scores, presents
 explicit result/goal types and snapshot provenance, and optionally manages local notes. Every
 section starts with a visible loading shell and renders an explicit empty or safe
 failure state. Source text is assigned with `textContent`, not HTML injection.

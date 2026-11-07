@@ -13,9 +13,11 @@ The implemented scope is UEFA Champions League 2026/27:
 - season: `2026`
 - expected league ID: `4946`
 - configured league phase: Matchdays 1-8 (18 fixtures each; 144 expected)
-- verified current database coverage: Matchdays 3 and 4 only (36 completed fixtures,
-  936 field-level change records)
-- pending source-backed backfill: Matchdays 1, 2, 5, 6, 7, and 8
+- owner-supplied current database evidence: 144 league-phase fixtures, 72 finished,
+  72 unfinished, 143 result records, 291 goal records, and 936 field-level change
+  records (not independently rerun in this handoff)
+- preserved earlier Matchday 3/4 capture evidence remains available for replay and
+  provenance review
 - later planned coverage: provider-advertised knockout-stage groups after explicit review
 
 The architecture keeps provider and competition identity configurable, but no other
@@ -27,10 +29,9 @@ capture/import batch. A missing local snapshot is a capture gap, not evidence th
 provider lacks that matchday.
 
 Owner-supplied evidence confirms the project foundation, immutable raw capture, the
-deployed 12-table schema, and a current database containing the 36 Matchday 3/4
-fixtures, all marked finished, with 936 field-level change records as of
-2026-11-06. The preserved Matchday 4 raw capture remains an earlier unfinished
-observation; later source observations may legitimately update those current rows.
+deployed 12-table schema, and the current database counts listed above. Earlier
+Matchday 3/4 raw captures remain immutable observations; later source observations
+may legitimately update current rows.
 The latest offline suite, API/browser flow, live one-shot sync, and scheduled
 operation remain awaiting manual verification after the latest edits.
 
@@ -123,6 +124,15 @@ python scripts/run_api.py --host 127.0.0.1 --port 8000
 
 Open `http://127.0.0.1:8000/`. Note writes are disabled by default. If explicitly
 enabled locally, they also require a separate token and remain local-only.
+
+The dashboard currently presents Overview, Match Explorer, read-only Insights, and
+Change Intelligence. Match Explorer uses server-side ordering: completed views show the
+newest known kickoff first, upcoming views show the nearest known kickoff first, and the
+All view shows the five most recent completed matches, upcoming fixtures, then older
+completed matches. Insights use valid completed `After90Minutes` scores from the
+selected local season; unfinished or score-incomplete fixtures are not used to
+invent averages or result counts. Team metrics are analytical summaries, not claims
+about official UEFA standings or tiebreakers.
 
 The one-shot synchronizer is intentionally not a daemon. By default it discovers
 provider-advertised groups and limits itself to configured league-phase matchdays;

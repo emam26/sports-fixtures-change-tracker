@@ -8,8 +8,9 @@ The project implements UEFA Champions League 2026/27 through OpenLigaDB:
 - season: `2026`
 - expected league ID: `4946`
 - configured league-phase expectation: Matchdays 1-8, 18 fixtures per matchday
-- verified imported coverage: Matchdays 3 and 4 only (36 fixtures)
-- pending source-backed coverage: Matchdays 1, 2, 5, 6, 7, and 8
+- owner-supplied current database evidence: 144 fixtures, 72 finished, 72 unfinished,
+  143 results, 291 goals, and 936 field-level changes (latest edits NOT RUN)
+- earlier Matchday 3/4 raw captures remain preserved for replay and provenance
 - later scope: provider-advertised knockout fixtures after explicit source review
 
 Competition identity remains configurable for future work, but no other competition
@@ -25,8 +26,8 @@ is currently implemented or claimed.
 | 3 - typed import | validation, upserts, provenance, changes, rollback, checkpoints | MD3/MD4 current data verified; latest audit not run |
 | 4 - offline replay/evaluation | dry-run and deterministic evaluation CLIs | Prior dry run verified; latest edits not run |
 | 5 - incremental synchronization | last-change decision, retries, lock, logs, partial failures | Initial/repeat manual sync verified; latest audit not run |
-| 6 - local FastAPI | status, discovery, fixtures, history, operations, notes | Owner verified read-only endpoint responses; latest audit not run |
-| 7 - browser dashboard | three public sections, filters, detail, optional notes | Browser visual audit remains pending after latest changes |
+| 6 - local FastAPI | status, discovery, fixtures, history, operations, notes, read-only insights | Owner verified read-only endpoint responses; latest audit not run |
+| 7 - browser dashboard | four public sections, filters, detail, insights, optional notes | Browser visual audit remains pending after latest changes |
 | 8 - one-shot scheduling support | WSL wrapper and Task Scheduler handoff | No task registered or activated |
 | 9 - test/evaluation framework | offline, mocked, repository, SQL-gated plans | 85 non-SQL passed / 1 deselected before latest audit |
 | 10 - portfolio documentation | architecture, API, testing, evaluation, runbook | Updated; owner review pending |
@@ -564,20 +565,138 @@ The user supplied the current SQL counts and source conflict; those facts remain
 evidence, not independently rerun evidence.
 The next manual step is the reviewed 8A procedure in `docs/MANUAL_RUNBOOK.md`.
 
+### 2026-11-07 Evidence-based football Insights layer (NOT RUN)
+
+The dashboard now has a fourth public section, **Insights**, backed by read-only
+FastAPI routes and a dedicated analytics service. The implementation uses the
+deployed schema without adding tables or changing current data. A repository query
+returns one row per fixture, pre-aggregating goal rows before joining them so goal
+events cannot multiply result statistics. Analytics treats only a provider-finished
+fixture with a two-sided `After90Minutes` score as a valid completed match. It keeps
+valid 0-0 results, excludes unfinished/score-incomplete/quarantined observations
+from scoring denominators, and reports source-observed goal-event counts separately
+from score totals.
+
+Implemented read-only capabilities:
+
+- season summary with fixture state counts, full-time goals, average goals per valid
+  completed match, home/draw/away distribution, latest successful synchronization
+  timestamp, and deterministic highest-scoring completed fixtures;
+- stable provider-team metrics with played/won/drawn/lost, goals for/against/diff,
+  points, home/away splits, observed goal-event counts, and recent form from the
+  latest five valid completed matches;
+- matchday counts, valid full-time goals, averages, result distributions, and trend
+  data, including safe null matchday/kickoff handling;
+- team detail with recent completed results; no official UEFA ranking/tiebreaker
+  claim is made;
+- responsive browser charts/tables, team search/sort/detail selection, empty/error
+  states, safe `textContent` rendering, and preserved local-only note/API security.
+
+Changed files for this handoff:
+
+- `src/sports_tracker/analytics.py` (new pure analytics service and aggregation rules)
+- `src/sports_tracker/api/models.py`
+- `src/sports_tracker/api/repository.py`
+- `src/sports_tracker/api/app.py`
+- `src/sports_tracker/web/index.html`
+- `src/sports_tracker/web/app.js`
+- `src/sports_tracker/web/styles.css`
+- `tests/test_analytics.py` (new)
+- `tests/test_api.py`
+- `tests/test_api_repository.py`
+- `README.md`, `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/TESTING.md`,
+  `docs/DEPLOYMENT_LOCAL.md`, `docs/MANUAL_RUNBOOK.md`, and `docs/COMMIT_PLAN.md`
+
+No Python code, tests, Ruff, SQL, HTTP request, database query/import, server,
+network operation, or Git operation was executed for this implementation. Static
+checks, offline tests, API responses, SQL-backed analytics, and browser rendering
+are **NOT RUN**. The supplied database coverage facts remain owner evidence; this
+change does not re-verify them. The next manual check is to activate the project
+environment, run Ruff and the offline suite, then perform the API/browser checklist
+in `docs/MANUAL_RUNBOOK.md` and return only non-secret failures or outputs.
+
 ### 2026-11-07 Public dashboard database-status cleanup (NOT RUN)
 
 Removed the public dashboard's `Database service` / `Database available` indicator,
 including its header container, `/health` browser request, status handler, and
 unused service-status CSS. Football-data requests still render clear API failure
 messages through the existing alert and section states. The accurate Overview
-`Last updated` indicator and the three public sections remain unchanged.
+`Last updated` indicator and the then-current three public sections were preserved;
+the later Insights handoff is documented separately below.
 
 The backend `/health` endpoint, `/api/status` note-write capability check, database
 monitoring, SQL Server data, ingestion, synchronization, snapshots, and credentials
-were not changed. Frontend contract assertions now verify that the removed markup,
-health request, handler, and CSS do not return.
+were not changed. Frontend contract assertions verified that the removed markup,
+health request, handler, and CSS did not return; the later Insights handoff adds a
+separate read-only public analytics section without restoring the database-status UI.
 
 Changed files: `src/sports_tracker/web/index.html`, `src/sports_tracker/web/app.js`,
 `src/sports_tracker/web/styles.css`, `tests/test_api.py`, and this build record.
 No project code, tests, Git commands, SQL, database operations, imports, network
 requests, or servers were executed for this cleanup.
+
+### 2026-11-07 Insights HTTP 404 diagnosis (NOT RUN)
+
+The reported dashboard error was compared with the current source rather than treated as
+an analytics or SQL failure. The current FastAPI factory registers `/api/insights/summary`,
+`/api/insights/teams`, `/api/insights/matchdays`, and
+`/api/insights/teams/{team_id}`. The frontend constructs those same relative paths, and
+`scripts/run_api.py` serves the current factory on the requested local port. Owner-supplied
+verification showed the same three collection endpoints succeeded on temporary port 8765,
+while the browser used port 8000. The supported explanation is therefore a stale port-8000
+process or cached page/server pair, not a confirmed missing route in the current checkout.
+
+The frontend now uses independent settled requests for the three Insights panels: one 404
+does not erase successful summary, team, or matchday data, while the failed panel receives a
+clear error state. A route-contract regression test checks that the exact frontend paths are
+registered by the FastAPI app. No duplicate routes, port hard-coding, placeholder analytics,
+SQL changes, or database changes were introduced.
+
+Changed for this diagnosis:
+
+- `src/sports_tracker/web/app.js` — preserve successful Insights panels when a sibling
+  analytics request fails and show a scoped error for the unavailable panel.
+- `src/sports_tracker/web/index.html` — bump the shared asset version so a browser does not
+  reuse the pre-fix JavaScript bundle after a hard reload.
+- `tests/test_api.py` — assert the four registered Insights routes match the frontend URLs.
+- `docs/DEPLOYMENT_LOCAL.md`, `docs/MANUAL_RUNBOOK.md`, and `docs/TESTING.md` — document
+  stale-process diagnosis, restart, hard-reload, route-contract coverage, and port-8000
+  verification.
+
+No project code, tests, Ruff, SQL, HTTP request, database query/import, server operation, or
+Git operation was executed for this handoff. The route-contract test and partial-failure
+behavior are **NOT RUN**. The port-8000 stale-process conclusion remains based on the supplied
+8765/8000 evidence; no browser or process inspection was performed here.
+
+### 2026-11-07 Match Explorer navigation and server-side ordering (NOT RUN)
+
+The public dashboard navigation is now ordered Overview, Match Explorer, Insights, and
+Change Intelligence. JavaScript keeps the same section order in the live dashboard and
+tracks the active section with `aria-current="location"`, including hash navigation and
+IntersectionObserver updates. The dashboard assets use a new version so the navigation
+and ordering changes are not hidden by an earlier browser cache entry.
+
+Match Explorer now sends a validated `sort` value to the API. The default `explorer` sort
+is applied in SQL before pagination: Completed filters use newest known kickoff first;
+Upcoming filters use nearest known kickoff first; and All filters use five recent
+completed fixtures, then upcoming fixtures, then older completed fixtures. Known kickoff
+times precede missing values and stable provider match IDs, followed by internal match IDs,
+make ties deterministic. Explicit `kickoff-asc` and `kickoff-desc` options preserve a
+simple global kickoff order for callers that need it. Unfinished matches remain upcoming;
+the UI does not introduce a LIVE state.
+
+Changed files:
+
+- `src/sports_tracker/api/repository.py` and `src/sports_tracker/api/app.py` — validated
+  sort contract and SQL ordering before `OFFSET`/`FETCH` pagination.
+- `src/sports_tracker/web/index.html`, `src/sports_tracker/web/app.js`, and
+  `src/sports_tracker/web/styles.css` — navigation order/state, server-driven sorting,
+  user-facing order labels, and cache-busted active-link styling.
+- `tests/test_api.py` and `tests/test_api_repository.py` — navigation, sort validation,
+  SQL ordering, tie-breaker, and pagination-order contracts.
+- `README.md`, `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT_LOCAL.md`,
+  `docs/MANUAL_RUNBOOK.md`, and `docs/TESTING.md` — documented ordering and manual
+  verification.
+
+No project code, tests, Ruff, SQL, HTTP requests, synchronization, database migration,
+Git operation, or data mutation was executed for this handoff. All checks are **NOT RUN**.
