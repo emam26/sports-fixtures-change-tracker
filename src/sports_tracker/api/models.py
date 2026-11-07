@@ -70,6 +70,107 @@ class DashboardSummary(ApiModel):
     latest_successful_import_run_id: int | None = None
 
 
+class InsightMatch(ApiModel):
+    """A completed fixture used by the read-only insights views."""
+
+    match_id: int
+    provider_match_id: int
+    matchday_number: int | None = None
+    kickoff_utc: datetime | None = None
+    home_team: str
+    away_team: str
+    home_score: int
+    away_score: int
+    total_goals: int
+    observed_goal_events: int
+
+
+class TeamLeader(ApiModel):
+    team_id: int
+    team_name: str
+    value: int
+    matches_played: int
+
+
+class InsightSummary(ApiModel):
+    competition_season_id: int | None = None
+    fixtures_total: int
+    fixtures_finished: int
+    fixtures_unfinished: int
+    completed_matches_with_valid_final_score: int
+    full_time_goals: int
+    average_full_time_goals_per_completed_match: float | None = None
+    home_wins: int
+    draws: int
+    away_wins: int
+    observed_goal_events: int
+    highest_scoring_matches: list[InsightMatch] = Field(default_factory=list)
+    most_goals_teams: list[TeamLeader] = Field(default_factory=list)
+    fewest_conceded_teams: list[TeamLeader] = Field(default_factory=list)
+    latest_successful_sync_at_utc: datetime | None = None
+
+
+class TeamSplit(ApiModel):
+    played: int
+    won: int
+    drawn: int
+    lost: int
+    goals_for: int
+    goals_against: int
+    goal_difference: int
+    points: int
+    clean_sheets: int
+
+
+class TeamInsight(ApiModel):
+    team_id: int
+    provider_team_id: int
+    team_name: str
+    played: int
+    won: int
+    drawn: int
+    lost: int
+    goals_for: int
+    goals_against: int
+    goal_difference: int
+    points: int
+    home: TeamSplit
+    away: TeamSplit
+    recent_form: list[str] = Field(default_factory=list)
+    observed_goal_events: int
+    clean_sheets: int
+
+
+class TeamRecentMatch(ApiModel):
+    match_id: int
+    provider_match_id: int
+    matchday_number: int | None = None
+    kickoff_utc: datetime | None = None
+    home_team: str
+    away_team: str
+    team_score: int
+    opponent_score: int
+    outcome: str
+
+
+class TeamInsightDetail(TeamInsight):
+    recent_matches: list[TeamRecentMatch] = Field(default_factory=list)
+
+
+class MatchdayInsight(ApiModel):
+    matchday_number: int | None = None
+    fixture_count: int
+    finished_count: int
+    unfinished_count: int
+    completed_matches_with_valid_final_score: int
+    full_time_goals: int
+    average_full_time_goals: float | None = None
+    home_wins: int
+    draws: int
+    away_wins: int
+    observed_goal_events: int
+
+
 class Result(ApiModel):
     result_type: str
     result_name: str | None = None

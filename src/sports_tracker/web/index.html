@@ -12,8 +12,8 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230a1b35'/%3E%3Cpath d='M16 32h32M32 16v32' stroke='%2390bdfb' stroke-width='6'/%3E%3C/svg%3E"
     >
-    <link rel="stylesheet" href="/assets/styles.css?v=20261107-dashboard-cleanup">
-    <script src="/assets/app.js?v=20261107-dashboard-cleanup" defer></script>
+    <link rel="stylesheet" href="/assets/styles.css?v=20261107-navigation-sort">
+    <script src="/assets/app.js?v=20261107-navigation-sort" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to dashboard content</a>
@@ -31,6 +31,7 @@
       <div class="shell nav-links">
         <a href="#overview">Overview</a>
         <a href="#match-explorer">Match explorer</a>
+        <a href="#insights">Insights</a>
         <a href="#change-intelligence">Change intelligence</a>
       </div>
     </nav>
@@ -110,6 +111,144 @@
         </section>
       </section>
 
+      <section id="insights" class="dashboard-section insights-section" aria-labelledby="insights-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Evidence-based match analysis</p>
+            <h2 id="insights-title">Insights</h2>
+          </div>
+          <p id="insights-status" class="status-message" role="status" aria-live="polite">
+            Loading analytical summaries…
+          </p>
+          <p id="insights-source" class="metadata">
+            Source: loaded local fixture records / Last updated: waiting
+          </p>
+        </div>
+
+        <div id="insight-summary-grid" class="insight-summary-grid" aria-live="polite">
+          <article class="insight-stat-card">
+            <span>Full-time goals</span>
+            <strong id="insight-goals">—</strong>
+            <small>Valid After90Minutes scores</small>
+          </article>
+          <article class="insight-stat-card">
+            <span>Goals per completed match</span>
+            <strong id="insight-average-goals">—</strong>
+            <small>Incomplete scores excluded</small>
+          </article>
+          <article class="insight-stat-card">
+            <span>Home / draw / away</span>
+            <strong id="insight-result-split">—</strong>
+            <small>Completed matches only</small>
+          </article>
+          <article class="insight-stat-card">
+            <span>Observed goal events</span>
+            <strong id="insight-goal-events">—</strong>
+            <small>Source goal rows linked to valid finals</small>
+          </article>
+        </div>
+
+        <div class="insight-panel-grid">
+          <article class="insight-panel">
+            <div class="insight-panel-heading">
+              <div>
+                <p class="eyebrow">League-phase rhythm</p>
+                <h3>Goals by matchday</h3>
+              </div>
+              <span id="insight-goal-trend-summary" class="metadata">Waiting for data</span>
+            </div>
+            <div
+              id="insight-goal-trend"
+              class="insight-chart"
+              role="img"
+              aria-label="Full-time goals by matchday"
+            ></div>
+            <div id="insight-goal-trend-table" class="chart-data-table" aria-live="polite"></div>
+          </article>
+
+          <article class="insight-panel">
+            <div class="insight-panel-heading">
+              <div>
+                <p class="eyebrow">Result balance</p>
+                <h3>Home, draw and away results</h3>
+              </div>
+            </div>
+            <div id="insight-result-bars" class="result-bars" aria-live="polite"></div>
+            <p id="insight-result-note" class="metadata">Valid final scores only.</p>
+            <div class="insight-leaders">
+              <div>
+                <span class="insight-leader-label">Most goals</span>
+                <strong id="insight-most-goals">—</strong>
+              </div>
+              <div>
+                <span class="insight-leader-label">Fewest conceded</span>
+                <strong id="insight-fewest-conceded">—</strong>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <article class="insight-panel team-insight-panel">
+          <div class="insight-panel-heading">
+            <div>
+              <p class="eyebrow">Club performance</p>
+              <h3>Team comparison</h3>
+            </div>
+            <p class="metadata">Select a team for recent results.</p>
+          </div>
+          <div class="insight-toolbar">
+            <label>
+              Search teams
+              <input id="insight-team-search" type="search" maxlength="200" placeholder="Search a club name" autocomplete="off">
+            </label>
+            <label>
+              Sort teams
+              <select id="insight-team-sort">
+                <option value="points">Points</option>
+                <option value="goals">Goals for</option>
+                <option value="defence">Fewest conceded</option>
+                <option value="name">Name</option>
+              </select>
+            </label>
+          </div>
+          <div id="insight-team-chart" class="team-chart" role="img" aria-label="Team points comparison"></div>
+          <div class="insight-table-wrap">
+            <table class="insight-table">
+              <caption class="visually-hidden">Team performance comparison</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Team</th>
+                  <th scope="col">P</th>
+                  <th scope="col">W-D-L</th>
+                  <th scope="col">GF-GA</th>
+                  <th scope="col">GD</th>
+                  <th scope="col">Pts</th>
+                  <th scope="col">CS</th>
+                  <th scope="col"><span class="visually-hidden">Details</span></th>
+                </tr>
+              </thead>
+              <tbody id="insight-team-body"></tbody>
+            </table>
+          </div>
+          <div id="insight-team-detail" class="team-detail" aria-live="polite">
+            <div class="content-state">
+              <strong>Select a team</strong>
+              <span>Recent completed results will appear here.</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="insight-panel">
+          <div class="insight-panel-heading">
+            <div>
+              <p class="eyebrow">Standout results</p>
+              <h3>Highest-scoring completed matches</h3>
+            </div>
+          </div>
+          <div id="insight-highest-scoring" class="highest-scoring-list" aria-live="polite"></div>
+        </article>
+      </section>
+
       <section id="match-explorer" class="dashboard-section" aria-labelledby="match-explorer-title">
         <div class="section-heading">
           <div>
@@ -145,8 +284,9 @@
           <label>
             Kickoff order
             <select id="fixture-sort" name="fixture-sort">
-              <option value="kickoff-asc">Earliest first</option>
-              <option value="kickoff-desc">Latest first</option>
+              <option value="explorer">Recommended order</option>
+              <option value="kickoff-asc">Earliest kickoff first</option>
+              <option value="kickoff-desc">Latest kickoff first</option>
             </select>
           </label>
           <label class="search-field">

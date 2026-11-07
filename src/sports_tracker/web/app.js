@@ -11,6 +11,25 @@ const ui = {
   metricChangesDetail: document.querySelector("#metric-changes-detail"),
   upcomingStatus: document.querySelector("#upcoming-status"),
   upcomingList: document.querySelector("#upcoming-list"),
+  insightsStatus: document.querySelector("#insights-status"),
+  insightsSource: document.querySelector("#insights-source"),
+  insightGoals: document.querySelector("#insight-goals"),
+  insightAverageGoals: document.querySelector("#insight-average-goals"),
+  insightResultSplit: document.querySelector("#insight-result-split"),
+  insightGoalEvents: document.querySelector("#insight-goal-events"),
+  insightGoalTrendSummary: document.querySelector("#insight-goal-trend-summary"),
+  insightGoalTrend: document.querySelector("#insight-goal-trend"),
+  insightGoalTrendTable: document.querySelector("#insight-goal-trend-table"),
+  insightResultBars: document.querySelector("#insight-result-bars"),
+  insightResultNote: document.querySelector("#insight-result-note"),
+  insightMostGoals: document.querySelector("#insight-most-goals"),
+  insightFewestConceded: document.querySelector("#insight-fewest-conceded"),
+  insightTeamSearch: document.querySelector("#insight-team-search"),
+  insightTeamSort: document.querySelector("#insight-team-sort"),
+  insightTeamChart: document.querySelector("#insight-team-chart"),
+  insightTeamBody: document.querySelector("#insight-team-body"),
+  insightTeamDetail: document.querySelector("#insight-team-detail"),
+  insightHighestScoring: document.querySelector("#insight-highest-scoring"),
   filters: document.querySelector("#filters"),
   competitionSelect: document.querySelector("#competition"),
   matchdaySelect: document.querySelector("#matchday"),
@@ -30,6 +49,7 @@ const ui = {
 };
 
 const state = {
+  activeSectionId: "overview",
   competitions: [],
   detailRequestId: 0,
   changeOffset: 0,
@@ -42,6 +62,11 @@ const state = {
   noteWritesEnabled: false,
   overviewRequestId: 0,
   upcomingRequestId: 0,
+  insightsRequestId: 0,
+  insightsTeamRequestId: 0,
+  insightSummary: null,
+  insightTeams: [],
+  insightMatchdays: [],
 };
 
 const integerFormatter = new Intl.NumberFormat();
@@ -88,6 +113,62 @@ function clearAppAlert() {
   if (!ui.appAlert) return;
   ui.appAlert.hidden = true;
   ui.appAlert.textContent = "";
+}
+
+const DASHBOARD_SECTION_ORDER = [
+  "overview",
+  "match-explorer",
+  "insights",
+  "change-intelligence",
+];
+
+function orderDashboardSections() {
+  const layout = document.querySelector(".dashboard-layout");
+  if (!layout) return;
+  DASHBOARD_SECTION_ORDER.forEach((sectionId) => {
+    const section = document.getElementById(sectionId);
+    if (section) layout.append(section);
+  });
+}
+
+function setActiveSection(sectionId, links, sections) {
+  if (!sections.some((section) => section.id === sectionId)) return;
+  state.activeSectionId = sectionId;
+  links.forEach((link) => {
+    const isCurrent = link.getAttribute("href") === `#${sectionId}`;
+    if (isCurrent) link.setAttribute("aria-current", "location");
+    else link.removeAttribute("aria-current");
+  });
+}
+
+function setupSectionNavigation() {
+  const links = [...document.querySelectorAll('.section-nav a[href^="#"]')];
+  const sections = DASHBOARD_SECTION_ORDER
+    .map((sectionId) => document.getElementById(sectionId))
+    .filter(Boolean);
+  if (!links.length || !sections.length) return;
+
+  const requestedSection = window.location.hash.slice(1);
+  const initialSection = sections.some((section) => section.id === requestedSection)
+    ? requestedSection
+    : sections[0].id;
+  setActiveSection(initialSection, links, sections);
+  window.addEventListener("hashchange", () => {
+    setActiveSection(window.location.hash.slice(1), links, sections);
+  });
+
+  if ("IntersectionObserver" in window) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((left, right) => left.boundingClientRect.top - right.boundingClientRect.top)[0];
+        if (visible) setActiveSection(visible.target.id, links, sections);
+      },
+      { rootMargin: "-18% 0px -68% 0px", threshold: 0 },
+    );
+    sections.forEach((section) => observer.observe(section));
+  }
 }
 
 function formatCount(value) {
@@ -684,18 +765,386 @@ async function loadOverview() {
   }
 }
 
-function sortFixtures(matches, sortOrder = ui.sortSelect?.value ?? "kickoff-asc") {
-  const direction = sortOrder === "kickoff-desc" ? -1 : 1;
-  return [...matches].sort((left, right) => {
-    const leftTime = left.kickoff_utc ? Date.parse(left.kickoff_utc) : Number.NaN;
-    const rightTime = right.kickoff_utc ? Date.parse(right.kickoff_utc) : Number.NaN;
-    const leftMissing = Number.isNaN(leftTime);
-    const rightMissing = Number.isNaN(rightTime);
-    if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
-    if (leftMissing) return (Number(left.match_id) - Number(right.match_id)) * direction;
-    if (leftTime !== rightTime) return (leftTime - rightTime) * direction;
-    return (Number(left.match_id) - Number(right.match_id)) * direction;
+function formatAverage(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return Number(value).toFixed(2);
+}
+
+function renderInsightSummary(summary) {
+  setText(
+    ui.insightsSource,
+    `Source: loaded local fixture records / Last updated: ${formatDate(summary.latest_successful_sync_at_utc, "Not recorded")}`,
+  );
+  setText(ui.insightGoals, formatCount(summary.full_time_goals));
+  setText(
+    ui.insightAverageGoals,
+    formatAverage(summary.average_full_time_goals_per_completed_match),
+  );
+  setText(
+    ui.insightResultSplit,
+    `${formatCount(summary.home_wins)} / ${formatCount(summary.draws)} / ${formatCount(summary.away_wins)}`,
+  );
+  setText(ui.insightGoalEvents, formatCount(summary.observed_goal_events));
+  const validCount = formatCount(summary.completed_matches_with_valid_final_score);
+  setText(ui.insightResultNote, `${validCount} completed matches with valid final scores.`);
+  const leaderText = (leaders, suffix) => {
+    if (!leaders?.length) return "No valid completed matches";
+    return leaders
+      .slice(0, 2)
+      .map(
+        (leader) =>
+          `${leader.team_name} (${formatCount(leader.value)} ${suffix}, ${formatCount(leader.matches_played)} matches)`,
+      )
+      .join(" · ");
+  };
+  setText(ui.insightMostGoals, leaderText(summary.most_goals_teams, "goals"));
+  setText(ui.insightFewestConceded, leaderText(summary.fewest_conceded_teams, "conceded"));
+
+  ui.insightHighestScoring.replaceChildren();
+  if (!summary.highest_scoring_matches?.length) {
+    renderListState(
+      ui.insightHighestScoring,
+      "No completed scorelines yet",
+      "Highest-scoring matches will appear after valid final results are available.",
+    );
+  } else {
+    summary.highest_scoring_matches.forEach((match) => {
+      const item = element("article", { className: "highest-scoring-item" });
+      const identity = element("div", { className: "highest-scoring-identity" });
+      identity.append(
+        element("strong", { text: `${match.home_team} vs ${match.away_team}` }),
+        element("span", {
+          className: "metadata",
+          text: `Matchday ${valueOrNotSupplied(match.matchday_number)} / ${formatDate(match.kickoff_utc, "Kickoff not recorded")}`,
+        }),
+      );
+      const score = element("strong", {
+        className: "highest-scoring-score",
+        text: `${match.home_score}-${match.away_score}`,
+      });
+      const button = element("button", {
+        className: "button button-quiet",
+        text: "View match",
+        attributes: { type: "button" },
+      });
+      button.addEventListener("click", () => showMatch(match.match_id));
+      item.append(identity, score, button);
+      ui.insightHighestScoring.append(item);
+    });
+  }
+}
+
+function renderInsightGoalTrend(matchdays) {
+  ui.insightGoalTrend.replaceChildren();
+  ui.insightGoalTrendTable.replaceChildren();
+  const available = matchdays.filter((item) => item.completed_matches_with_valid_final_score > 0);
+  if (!available.length) {
+    renderListState(
+      ui.insightGoalTrend,
+      "No goal trend yet",
+      "A trend requires at least one completed fixture with a valid final score.",
+    );
+    setText(ui.insightGoalTrendSummary, "No valid completed matchdays");
+    return;
+  }
+  const maxGoals = Math.max(...available.map((item) => Number(item.full_time_goals)), 1);
+  const totalGoals = available.reduce((total, item) => total + Number(item.full_time_goals), 0);
+  setText(ui.insightGoalTrendSummary, `${formatCount(totalGoals)} goals across ${formatCount(available.length)} matchdays`);
+  available.forEach((item) => {
+    const matchdayLabel =
+      item.matchday_number === null ? "Unassigned matchday" : `Matchday ${item.matchday_number}`;
+    const bar = element("button", {
+      className: "chart-column",
+      attributes: {
+        type: "button",
+        "aria-label": `${matchdayLabel}: ${formatCount(item.full_time_goals)} full-time goals`,
+      },
+    });
+    if (item.matchday_number !== null) {
+      bar.addEventListener("click", () => {
+        ui.matchdaySelect.value = String(item.matchday_number);
+        void loadFixtures();
+        document.querySelector("#match-explorer")?.scrollIntoView({ behavior: "smooth" });
+      });
+    } else {
+      bar.disabled = true;
+    }
+    const value = Number(item.full_time_goals);
+    const fill = element("div", { className: "chart-bar-fill" });
+    fill.style.setProperty("--bar-size", `${Math.max((value / maxGoals) * 100, 4)}%`);
+    bar.append(
+      element("div", { className: "chart-bar-track", attributes: { "aria-hidden": "true" } }),
+      element("span", { className: "chart-column-value", text: formatCount(value) }),
+      element("span", {
+        className: "chart-column-label",
+        text: item.matchday_number === null ? "Unassigned" : `MD ${item.matchday_number}`,
+      }),
+    );
+    bar.querySelector(".chart-bar-track").append(fill);
+    ui.insightGoalTrend.append(bar);
+    const row = element("div", { className: "chart-data-row" });
+    row.append(
+      element("span", {
+        text: item.matchday_number === null ? "Unassigned matchday" : `Matchday ${item.matchday_number}`,
+      }),
+      element("strong", { text: `${formatCount(value)} goals` }),
+      element("span", {
+        className: "metadata",
+        text: `${formatCount(item.completed_matches_with_valid_final_score)} completed`,
+      }),
+    );
+    ui.insightGoalTrendTable.append(row);
   });
+}
+
+function renderInsightResultBars(summary) {
+  ui.insightResultBars.replaceChildren();
+  const values = [
+    { label: "Home wins", value: Number(summary.home_wins), className: "result-home" },
+    { label: "Draws", value: Number(summary.draws), className: "result-draw" },
+    { label: "Away wins", value: Number(summary.away_wins), className: "result-away" },
+  ];
+  const maximum = Math.max(...values.map((item) => item.value), 1);
+  values.forEach((item) => {
+    const row = element("div", { className: "result-bar-row" });
+    const track = element("div", { className: "result-bar-track" });
+    const fill = element("span", { className: `result-bar-fill ${item.className}` });
+    fill.style.setProperty("--bar-size", `${Math.max((item.value / maximum) * 100, item.value ? 7 : 0)}%`);
+    track.append(fill);
+    row.append(
+      element("span", { className: "result-bar-label", text: item.label }),
+      track,
+      element("strong", { text: formatCount(item.value) }),
+    );
+    ui.insightResultBars.append(row);
+  });
+}
+
+function sortedInsightTeams() {
+  const query = ui.insightTeamSearch.value.trim().toLocaleLowerCase();
+  const sort = ui.insightTeamSort.value;
+  return state.insightTeams
+    .filter((team) => team.team_name.toLocaleLowerCase().includes(query))
+    .sort((left, right) => {
+      if (sort === "goals") return right.goals_for - left.goals_for || left.team_name.localeCompare(right.team_name);
+      if (sort === "defence") return left.goals_against - right.goals_against || right.points - left.points;
+      if (sort === "name") return left.team_name.localeCompare(right.team_name);
+      return right.points - left.points || right.goal_difference - left.goal_difference || left.team_name.localeCompare(right.team_name);
+    });
+}
+
+function renderInsightTeamChart(teams) {
+  ui.insightTeamChart.replaceChildren();
+  if (!teams.length) {
+    renderListState(ui.insightTeamChart, "No teams match", "Try a different team search.");
+    return;
+  }
+  const displayed = teams.slice(0, 8);
+  const maximum = Math.max(...displayed.map((team) => Number(team.points)), 1);
+  displayed.forEach((team) => {
+    const row = element("div", { className: "team-chart-row" });
+    const fill = element("span", { className: "team-chart-fill" });
+    fill.style.setProperty("--bar-size", `${Math.max((team.points / maximum) * 100, team.points ? 7 : 0)}%`);
+    row.append(
+      element("span", { className: "team-chart-label", text: team.team_name }),
+      element("span", { className: "team-chart-track", attributes: { "aria-hidden": "true" } }),
+      element("strong", { text: `${formatCount(team.points)} pts` }),
+    );
+    row.querySelector(".team-chart-track").append(fill);
+    ui.insightTeamChart.append(row);
+  });
+}
+
+function renderInsightTeams() {
+  const teams = sortedInsightTeams();
+  renderInsightTeamChart(teams);
+  ui.insightTeamBody.replaceChildren();
+  if (!teams.length) {
+    const row = element("tr");
+    const cell = element("td", {
+      text: "No team records match this search.",
+      attributes: { colspan: "8" },
+    });
+    row.append(cell);
+    ui.insightTeamBody.append(row);
+    return;
+  }
+  teams.forEach((team) => {
+    const row = element("tr");
+    const button = element("button", {
+      className: "table-link",
+      text: team.team_name,
+      attributes: { type: "button" },
+    });
+    button.addEventListener("click", () => loadInsightTeam(team.provider_team_id));
+    const cells = [
+      button,
+      String(team.played),
+      `${team.won}-${team.drawn}-${team.lost}`,
+      `${team.goals_for}-${team.goals_against}`,
+      String(team.goal_difference),
+      String(team.points),
+      String(team.clean_sheets),
+    ];
+    cells.forEach((content, index) => {
+      const cell = element("td");
+      if (index === 0) cell.append(content);
+      else cell.textContent = content;
+      row.append(cell);
+    });
+    const detailCell = element("td");
+    detailCell.append(
+      element("span", { className: "metadata", text: "Open" }),
+    );
+    row.append(detailCell);
+    ui.insightTeamBody.append(row);
+  });
+}
+
+function renderInsightTeamDetail(team) {
+  ui.insightTeamDetail.replaceChildren();
+  const heading = element("div", { className: "team-detail-heading" });
+  heading.append(
+    element("h4", { text: team.team_name }),
+    element("span", { className: "metadata", text: `Recent form: ${team.recent_form.length ? team.recent_form.join(" · ") : "Not available"}` }),
+  );
+  ui.insightTeamDetail.append(heading);
+  if (!team.recent_matches.length) {
+    ui.insightTeamDetail.append(
+      contentState("No recent completed results", "This team has no valid completed scorelines in the selected data."),
+    );
+    return;
+  }
+  const list = element("div", { className: "team-recent-list" });
+  team.recent_matches.forEach((match) => {
+    const item = element("div", { className: "team-recent-item" });
+    item.append(
+      statusPill(match.outcome),
+      element("span", { text: `${match.home_team} ${match.team_score}-${match.opponent_score} ${match.away_team}` }),
+      element("span", { className: "metadata", text: formatDate(match.kickoff_utc, "Kickoff not recorded") }),
+    );
+    list.append(item);
+  });
+  ui.insightTeamDetail.append(list);
+}
+
+async function loadInsightTeam(teamId) {
+  const requestId = ++state.insightsTeamRequestId;
+  ui.insightTeamDetail.replaceChildren(
+    contentState("Loading team detail", "Retrieving recent completed results.", "loading"),
+  );
+  try {
+    const team = await request(
+      apiPath(`/api/insights/teams/${teamId}`, { competition_season_id: selectedCompetitionId() }),
+    );
+    if (requestId !== state.insightsTeamRequestId) return;
+    renderInsightTeamDetail(team);
+  } catch (error) {
+    if (requestId !== state.insightsTeamRequestId) return;
+    renderListState(
+      ui.insightTeamDetail,
+      "Team detail is unavailable",
+      describeRequestFailure("Team detail", error),
+      "error",
+    );
+  }
+}
+
+function renderInsightSummaryUnavailable(error) {
+  [
+    ui.insightGoals,
+    ui.insightAverageGoals,
+    ui.insightResultSplit,
+    ui.insightGoalEvents,
+    ui.insightResultNote,
+    ui.insightMostGoals,
+    ui.insightFewestConceded,
+  ].forEach((node) => setText(node, "—"));
+  setText(ui.insightsSource, "Source: unavailable / Last updated: unavailable");
+  ui.insightResultBars.replaceChildren();
+  renderListState(
+    ui.insightHighestScoring,
+    "Insights summary unavailable",
+    describeRequestFailure("Insights summary", error),
+    "error",
+  );
+}
+
+function renderInsightGoalTrendUnavailable(error) {
+  ui.insightGoalTrendTable.replaceChildren();
+  setText(ui.insightGoalTrendSummary, "Unavailable");
+  renderListState(
+    ui.insightGoalTrend,
+    "Matchday trend unavailable",
+    describeRequestFailure("Matchday trend", error),
+    "error",
+  );
+}
+
+function renderInsightTeamsUnavailable(error) {
+  renderListState(
+    ui.insightTeamChart,
+    "Team insights unavailable",
+    describeRequestFailure("Team insights", error),
+    "error",
+  );
+  ui.insightTeamBody.replaceChildren();
+  const row = element("tr");
+  row.append(
+    element("td", {
+      text: "Team insights are unavailable.",
+      attributes: { colspan: "8" },
+    }),
+  );
+  ui.insightTeamBody.append(row);
+}
+
+async function loadInsights() {
+  const requestId = ++state.insightsRequestId;
+  setStatus(ui.insightsStatus, "Loading analytical summaries...", "loading");
+  const parameters = { competition_season_id: selectedCompetitionId() };
+  const results = await Promise.allSettled([
+    request(apiPath("/api/insights/summary", parameters)),
+    request(apiPath("/api/insights/teams", parameters)),
+    request(apiPath("/api/insights/matchdays", parameters)),
+  ]);
+  if (requestId !== state.insightsRequestId) return;
+
+  const [summaryResult, teamsResult, matchdaysResult] = results;
+  const summaryAvailable = summaryResult.status === "fulfilled";
+  const teamsAvailable = teamsResult.status === "fulfilled";
+  const matchdaysAvailable = matchdaysResult.status === "fulfilled";
+  state.insightSummary = summaryAvailable ? summaryResult.value : null;
+  state.insightTeams = teamsAvailable ? teamsResult.value : [];
+  state.insightMatchdays = matchdaysAvailable ? matchdaysResult.value : [];
+
+  if (summaryAvailable) {
+    renderInsightSummary(state.insightSummary);
+    renderInsightResultBars(state.insightSummary);
+  } else {
+    renderInsightSummaryUnavailable(summaryResult.reason);
+  }
+  if (matchdaysAvailable) renderInsightGoalTrend(state.insightMatchdays);
+  else renderInsightGoalTrendUnavailable(matchdaysResult.reason);
+  if (teamsAvailable) renderInsightTeams();
+  else renderInsightTeamsUnavailable(teamsResult.reason);
+  if (!summaryAvailable || !teamsAvailable || !matchdaysAvailable) {
+    renderListState(
+      ui.insightTeamDetail,
+      "Team detail is unavailable",
+      "The selected team analytics could not be loaded.",
+      "error",
+    );
+    const failures = results.filter((result) => result.status === "rejected");
+    const message =
+      failures.length === results.length
+        ? describeRequestFailure("Insights", failures[0].reason)
+        : "Some Insights data could not be loaded. Check the local API and try again.";
+    setStatus(ui.insightsStatus, message, "error");
+    showAppAlert(message);
+    return;
+  }
+  setStatus(ui.insightsStatus, "Insights updated from validated completed results.", "ok");
 }
 
 function fixtureKickoffText(match) {
@@ -708,7 +1157,7 @@ function fixtureKickoffText(match) {
 }
 
 function renderUpcomingFixtures(page) {
-  const matches = sortFixtures(page.items, "kickoff-asc");
+  const matches = page.items;
   ui.upcomingList.replaceChildren();
   if (matches.length === 0) {
     renderListState(
@@ -753,7 +1202,7 @@ function renderUpcomingFixtures(page) {
   setBusy(ui.upcomingList, false);
   setStatus(
     ui.upcomingStatus,
-    `${displayCount} upcoming fixture records shown in chronological kickoff order.${suffix}`,
+    `${displayCount} upcoming fixture records shown from nearest kickoff first.${suffix}`,
     "ok",
   );
 }
@@ -771,6 +1220,7 @@ async function loadUpcomingFixtures() {
         competition_season_id: selectedCompetitionId(),
         finished: false,
         limit: 6,
+        sort: "explorer",
       }),
     );
     if (requestId !== state.upcomingRequestId) return;
@@ -819,7 +1269,7 @@ function fixtureCard(match) {
 }
 
 function renderFixturePage(page) {
-  const matches = sortFixtures(page.items);
+  const matches = page.items;
   ui.fixtureList.replaceChildren();
   if (matches.length === 0) {
     renderListState(
@@ -832,7 +1282,16 @@ function renderFixturePage(page) {
     setBusy(ui.fixtureList, false);
   }
   const totalText = `${formatCount(page.total)} fixture${page.total === 1 ? "" : "s"}`;
-  setStatus(ui.fixtureStatus, `${totalText} found. Ordered by kickoff.`, "ok");
+  setStatus(ui.fixtureStatus, `${totalText} found. ${fixtureOrderLabel()}.`, "ok");
+}
+
+function fixtureOrderLabel() {
+  const selectedSort = ui.sortSelect?.value || "explorer";
+  if (selectedSort === "kickoff-asc") return "Earliest known kickoff first";
+  if (selectedSort === "kickoff-desc") return "Latest known kickoff first";
+  if (ui.finishedSelect?.value === "true") return "Newest completed kickoff first";
+  if (ui.finishedSelect?.value === "false") return "Nearest upcoming kickoff first";
+  return "Recommended order: recent completed, upcoming, then older completed";
 }
 
 async function loadFixtures() {
@@ -847,6 +1306,7 @@ async function loadFixtures() {
     matchday: ui.matchdaySelect?.value || null,
     finished: ui.finishedSelect?.value || null,
     search: ui.searchInput?.value.trim() || null,
+    sort: ui.sortSelect?.value || "explorer",
     limit: 200,
   };
   try {
@@ -1273,6 +1733,7 @@ async function refreshDashboard() {
   await Promise.all([
     loadServiceStatus(),
     loadOverview(),
+    loadInsights(),
     loadUpcomingFixtures(),
     loadFixtures(),
     loadChanges({ reset: true }),
@@ -1283,7 +1744,7 @@ function clearFilters() {
   ui.competitionSelect.value = "";
   ui.matchdaySelect.value = "";
   ui.finishedSelect.value = "";
-  ui.sortSelect.value = "kickoff-asc";
+  ui.sortSelect.value = "explorer";
   ui.searchInput.value = "";
 }
 
@@ -1298,17 +1759,14 @@ function attachEventListeners() {
     if (!matchdaysLoaded) return;
     await Promise.all([
       loadOverview(),
+      loadInsights(),
       loadUpcomingFixtures(),
       loadFixtures(),
       loadChanges({ reset: true }),
     ]);
   });
   ui.sortSelect.addEventListener("change", () => {
-    if (state.fixturePage) {
-      renderFixturePage(state.fixturePage);
-    } else if (!state.fixturesLoading) {
-      void loadFixtures();
-    }
+    if (!state.fixturesLoading) void loadFixtures();
   });
   document.querySelector("#clear-filters").addEventListener("click", async () => {
     clearFilters();
@@ -1317,6 +1775,7 @@ function attachEventListeners() {
     if (!matchdaysLoaded) return;
     await Promise.all([
       loadOverview(),
+      loadInsights(),
       loadUpcomingFixtures(),
       loadFixtures(),
       loadChanges({ reset: true }),
@@ -1324,6 +1783,8 @@ function attachEventListeners() {
   });
   document.querySelector("#refresh-dashboard").addEventListener("click", refreshDashboard);
   document.querySelector("#refresh-changes").addEventListener("click", loadChanges);
+  ui.insightTeamSearch.addEventListener("input", renderInsightTeams);
+  ui.insightTeamSort.addEventListener("change", renderInsightTeams);
   ui.previousChangePage.addEventListener("click", async () => {
     if (ui.previousChangePage.disabled) return;
     state.changeOffset = Math.max(0, state.changeOffset - state.changePageSize);
@@ -1350,6 +1811,8 @@ async function initialize() {
     document.body.prepend(fallback);
     return;
   }
+  orderDashboardSections();
+  setupSectionNavigation();
   attachEventListeners();
   await refreshDashboard();
 }

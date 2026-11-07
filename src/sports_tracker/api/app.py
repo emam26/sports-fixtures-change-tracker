@@ -22,13 +22,16 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from sports_tracker.analytics import AnalyticsService
 from sports_tracker.api.models import (
     Competition,
     DashboardSummary,
     Health,
     ImportRun,
+    InsightSummary,
     MatchChange,
     MatchChangePage,
+    MatchdayInsight,
     MatchdaySummary,
     MatchDetail,
     MatchPage,
@@ -37,9 +40,11 @@ from sports_tracker.api.models import (
     NoteUpdate,
     ServiceStatus,
     SyncCheckpoint,
+    TeamInsight,
+    TeamInsightDetail,
     ValidationIssue,
 )
-from sports_tracker.api.repository import Repository, SQLServerRepository
+from sports_tracker.api.repository import MatchSort, Repository, SQLServerRepository
 from sports_tracker.config import ApplicationSettings, load_application_settings
 from sports_tracker.runtime import open_sql_server_connection
 
@@ -70,6 +75,7 @@ def create_app(
     )
     app.state.repository = repo
     app.state.settings = app_settings
+    analytics = AnalyticsService(repo)
 
     @app.exception_handler(Exception)
     async def unhandled_error(_request: Request, exc: Exception) -> JSONResponse:
@@ -145,6 +151,7 @@ def create_app(
         search: Annotated[str | None, Query(max_length=200)] = None,
         limit: Limit = 50,
         offset: Offset = 0,
+        sort: MatchSort = "explorer",
     ) -> MatchPage:
         items, total = repository.matches(
             competition_season_id=competition_season_id,
@@ -153,6 +160,7 @@ def create_app(
             search=search.strip() if search else None,
             limit=limit,
             offset=offset,
+            sort=sort,
         )
         return MatchPage(items=items, total=total, limit=limit, offset=offset)
 
@@ -162,6 +170,34 @@ def create_app(
         competition_season_id: Annotated[int | None, Query(ge=1)] = None,
     ) -> DashboardSummary:
         return repository.dashboard_summary(competition_season_id)
+
+    @app.get("/api/insights/summary", response_model=InsightSummary)
+    def insights_summary(
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+    ) -> InsightSummary:
+        return analytics.summary(competition_season_id)
+
+    @app.get("/api/insights/teams", response_model=list[TeamInsight])
+    def insights_teams(
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+    ) -> list[TeamInsight]:
+        return analytics.teams(competition_season_id)
+
+    @app.get("/api/insights/matchdays", response_model=list[MatchdayInsight])
+    def insights_matchdays(
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+    ) -> list[MatchdayInsight]:
+        return analytics.matchdays(competition_season_id)
+
+    @app.get("/api/insights/teams/{team_id}", response_model=TeamInsightDetail)
+    def insights_team(
+        team_id: PositiveId,
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+    ) -> TeamInsightDetail:
+        record = analytics.team(competition_season_id, team_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Team insight not found")
+        return TeamInsightDetail.model_validate(record)
 
     @app.get("/api/matches/{match_id}", response_model=MatchDetail)
     def match(match_id: PositiveId, repository: RepositoryDependency):

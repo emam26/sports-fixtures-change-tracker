@@ -6,9 +6,12 @@ import logging
 from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 _LOGGER = logging.getLogger(__name__)
+
+MatchSort = Literal["explorer", "kickoff-asc", "kickoff-desc"]
+ALL_MATCH_RECENT_COMPLETED_LIMIT = 5
 
 
 class Repository(Protocol):
@@ -27,9 +30,17 @@ class Repository(Protocol):
         search: str | None,
         limit: int,
         offset: int,
+        sort: MatchSort = "explorer",
     ) -> tuple[list[dict[str, Any]], int]: ...
 
     def dashboard_summary(self, competition_season_id: int | None) -> dict[str, Any]: ...
+
+    def insight_rows(self, competition_season_id: int | None) -> list[dict[str, Any]]: ...
+
+    def insight_latest_successful_sync(
+        self,
+        competition_season_id: int | None,
+    ) -> datetime | None: ...
 
     def match(self, match_id: int) -> dict[str, Any] | None: ...
 
@@ -148,6 +159,7 @@ class SQLServerRepository:
         search: str | None,
         limit: int,
         offset: int,
+        sort: MatchSort = "explorer",
     ) -> tuple[list[dict[str, Any]], int]:
         predicates = ["1 = 1"]
         params: list[Any] = []
@@ -181,27 +193,86 @@ class SQLServerRepository:
             WHERE {where}
         """
         total = self._read(f"SELECT COUNT_BIG(*) AS total {base}", tuple(params))[0]
-        items = self._read(
-            f"""
-            SELECT m.match_id,
-                   m.provider_match_id,
-                   m.matchday_number,
-                   m.competition_stage AS stage_name,
-                   m.kickoff_utc,
-                   m.source_match_is_finished AS is_finished,
-                   ht.team_name AS home_team,
-                   at.team_name AS away_team,
-                   final_result.home_score,
-                   final_result.away_score,
-                   m.source_last_update_utc AS last_source_update_utc
-            {base}
-            ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
-                     m.kickoff_utc,
-                     m.match_id
-            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
-            """,
-            (*params, offset, limit),
-        )
+        if sort == "explorer" and finished is None:
+            items_sql = f"""
+                WITH filtered_matches AS (
+                    SELECT m.match_id,
+                           m.provider_match_id,
+                           m.matchday_number,
+                           m.competition_stage AS stage_name,
+                           m.kickoff_utc,
+                           m.source_match_is_finished AS is_finished,
+                           ht.team_name AS home_team,
+                           at.team_name AS away_team,
+                           final_result.home_score,
+                           final_result.away_score,
+                           m.source_last_update_utc AS last_source_update_utc,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY m.source_match_is_finished
+                               ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                                        m.kickoff_utc DESC,
+                                        m.provider_match_id DESC,
+                                        m.match_id DESC
+                           ) AS completed_recency_rank
+                    {base}
+                ),
+                ordered_matches AS (
+                    SELECT filtered_matches.*,
+                           CASE
+                               WHEN is_finished = 1
+                                    AND kickoff_utc IS NOT NULL
+                                    AND completed_recency_rank <=
+                                        {ALL_MATCH_RECENT_COMPLETED_LIMIT}
+                                   THEN 0
+                               WHEN is_finished = 0 THEN 1
+                               ELSE 2
+                           END AS ordering_group
+                    FROM filtered_matches
+                )
+                SELECT match_id,
+                       provider_match_id,
+                       matchday_number,
+                       stage_name,
+                       kickoff_utc,
+                       is_finished,
+                       home_team,
+                       away_team,
+                       home_score,
+                       away_score,
+                       last_source_update_utc
+                FROM ordered_matches
+                ORDER BY ordering_group,
+                         CASE WHEN kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                         CASE WHEN ordering_group IN (0, 2) THEN kickoff_utc END DESC,
+                         CASE WHEN ordering_group = 1 THEN kickoff_utc END,
+                         CASE WHEN ordering_group IN (0, 2) THEN provider_match_id END DESC,
+                         CASE WHEN ordering_group = 1 THEN provider_match_id END,
+                         match_id DESC
+                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
+            """
+        else:
+            descending = sort == "kickoff-desc" or (sort == "explorer" and finished is True)
+            direction = "DESC" if descending else "ASC"
+            items_sql = f"""
+                SELECT m.match_id,
+                       m.provider_match_id,
+                       m.matchday_number,
+                       m.competition_stage AS stage_name,
+                       m.kickoff_utc,
+                       m.source_match_is_finished AS is_finished,
+                       ht.team_name AS home_team,
+                       at.team_name AS away_team,
+                       final_result.home_score,
+                       final_result.away_score,
+                       m.source_last_update_utc AS last_source_update_utc
+                {base}
+                ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                         m.kickoff_utc {direction},
+                         m.provider_match_id {direction},
+                         m.match_id {direction}
+                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
+            """
+        items = self._read(items_sql, (*params, offset, limit))
         return items, int(total["total"])
 
     def dashboard_summary(self, competition_season_id: int | None) -> dict[str, Any]:
@@ -285,6 +356,86 @@ class SQLServerRepository:
             "latest_successful_snapshot_id": checkpoint.get("latest_successful_snapshot_id"),
             "latest_successful_import_run_id": checkpoint.get("latest_successful_import_run_id"),
         }
+
+    def insight_rows(self, competition_season_id: int | None) -> list[dict[str, Any]]:
+        """Return one row per fixture with an authoritative final-result projection.
+
+        Goal counts are aggregated in a CTE before the result projection is joined.
+        This prevents one fixture with multiple goal rows from multiplying its
+        result or its contribution to any downstream metric.
+        """
+
+        predicates = ["1 = 1"]
+        params: list[Any] = []
+        if competition_season_id is not None:
+            predicates.append("m.competition_season_id = ?")
+            params.append(competition_season_id)
+        where = " AND ".join(predicates)
+        return self._read(
+            f"""
+            WITH goal_counts AS
+            (
+                SELECT mg.match_id,
+                       COUNT_BIG(*) AS observed_goal_events
+                FROM dbo.match_goals AS mg
+                GROUP BY mg.match_id
+            )
+            SELECT m.match_id,
+                   m.provider_match_id,
+                   m.matchday_number,
+                   m.kickoff_utc,
+                   m.source_match_is_finished AS is_finished,
+                   ht.provider_team_id AS home_team_provider_id,
+                   at.provider_team_id AS away_team_provider_id,
+                   ht.team_name AS home_team,
+                   at.team_name AS away_team,
+                   final_result.home_score,
+                   final_result.away_score,
+                   COALESCE(gc.observed_goal_events, 0) AS observed_goal_events
+            FROM dbo.matches AS m
+            INNER JOIN dbo.teams AS ht ON ht.team_id = m.home_team_id
+            INNER JOIN dbo.teams AS at ON at.team_id = m.away_team_id
+            OUTER APPLY
+            (
+                SELECT TOP (1)
+                       mr.points_team1 AS home_score,
+                       mr.points_team2 AS away_score
+                FROM dbo.match_results AS mr
+                WHERE mr.match_id = m.match_id
+                  AND mr.result_type_kind = N'After90Minutes'
+                ORDER BY mr.result_order_id DESC, mr.match_result_id DESC
+            ) AS final_result
+            LEFT JOIN goal_counts AS gc ON gc.match_id = m.match_id
+            WHERE {where}
+            ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                     m.kickoff_utc,
+                     m.match_id;
+            """,
+            tuple(params),
+        )
+
+    def insight_latest_successful_sync(
+        self,
+        competition_season_id: int | None,
+    ) -> datetime | None:
+        predicates = [
+            "sc.last_successful_import_run_id IS NOT NULL",
+            "sc.last_processed_at_utc IS NOT NULL",
+        ]
+        params: list[Any] = []
+        if competition_season_id is not None:
+            predicates.append("sc.competition_season_id = ?")
+            params.append(competition_season_id)
+        records = self._read(
+            f"""
+            SELECT TOP (1) sc.last_processed_at_utc AS latest_successful_sync_at_utc
+            FROM dbo.sync_checkpoints AS sc
+            WHERE {" AND ".join(predicates)}
+            ORDER BY sc.last_processed_at_utc DESC, sc.sync_checkpoint_id DESC;
+            """,
+            tuple(params),
+        )
+        return records[0]["latest_successful_sync_at_utc"] if records else None
 
     def match(self, match_id: int) -> dict[str, Any] | None:
         records = self._read(

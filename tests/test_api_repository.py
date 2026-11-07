@@ -125,10 +125,78 @@ def test_repository_uses_deployed_competition_and_match_columns() -> None:
     assert "m.source_match_is_finished" in statements
     assert "mr.result_type_kind" in statements
     assert "ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END" in statements
+    assert "m.kickoff_utc DESC" in statements
+    assert "m.provider_match_id DESC" in statements
     match_parameters = [
         parameters for statement, parameters in harness.calls if "OFFSET" in statement
     ]
     assert match_parameters == [(1, 3, True, "%A~%~_~[%", "%A~%~_~[%", 0, 25)]
+
+
+def test_repository_match_ordering_is_server_side_and_deterministic() -> None:
+    def resolve(statement: str, parameters: tuple[Any, ...]) -> ResultSet:
+        if "COUNT_BIG(*) AS total" in statement:
+            return (("total",), [(3,)])
+        if "FROM dbo.matches AS m" in statement:
+            assert parameters[-2:] == (0, 2)
+            return (
+                (
+                    "match_id",
+                    "provider_match_id",
+                    "matchday_number",
+                    "stage_name",
+                    "kickoff_utc",
+                    "is_finished",
+                    "home_team",
+                    "away_team",
+                    "home_score",
+                    "away_score",
+                    "last_source_update_utc",
+                ),
+                [(10, 123, 3, None, None, False, "A", "B", None, None, None)],
+            )
+        raise AssertionError(f"Unexpected query: {statement}")
+
+    harness = QueryHarness(resolve)
+    repository = SQLServerRepository(harness.connection)
+
+    repository.matches(
+        competition_season_id=None,
+        matchday=None,
+        finished=True,
+        search=None,
+        limit=2,
+        offset=0,
+    )
+    repository.matches(
+        competition_season_id=None,
+        matchday=None,
+        finished=False,
+        search=None,
+        limit=2,
+        offset=0,
+    )
+    repository.matches(
+        competition_season_id=None,
+        matchday=None,
+        finished=None,
+        search=None,
+        limit=2,
+        offset=0,
+    )
+
+    item_statements = [statement for statement, _ in harness.calls if "OFFSET" in statement]
+    completed_statement, upcoming_statement, all_statement = item_statements
+    assert "m.kickoff_utc DESC" in completed_statement
+    assert "m.provider_match_id DESC" in completed_statement
+    assert "m.kickoff_utc ASC" in upcoming_statement
+    assert "m.provider_match_id ASC" in upcoming_statement
+    assert "ROW_NUMBER() OVER" in all_statement
+    assert "PARTITION BY m.source_match_is_finished" in all_statement
+    assert "completed_recency_rank <=" in all_statement
+    assert "ordering_group" in all_statement
+    assert "CASE WHEN ordering_group = 1 THEN kickoff_utc END" in all_statement
+    assert all_statement.index("ORDER BY ordering_group") < all_statement.index("OFFSET")
 
 
 def test_repository_match_detail_uses_typed_results_and_real_goal_columns() -> None:
@@ -234,6 +302,48 @@ def test_repository_matchdays_and_checkpoints_use_deployed_schema() -> None:
     statements = "\n".join(statement for statement, _ in harness.calls)
     assert "m.source_match_is_finished" in statements
     assert "sc.last_successful_import_run_id" in statements
+
+
+def test_repository_insight_query_preaggregates_goals_and_uses_after90_only() -> None:
+    now = datetime(2026, 11, 7, 12)
+
+    def resolve(statement: str, parameters: tuple[Any, ...]) -> ResultSet:
+        if "WITH goal_counts AS" in statement:
+            assert parameters == (1,)
+            return (
+                (
+                    "match_id",
+                    "provider_match_id",
+                    "matchday_number",
+                    "kickoff_utc",
+                    "is_finished",
+                    "home_team_provider_id",
+                    "away_team_provider_id",
+                    "home_team",
+                    "away_team",
+                    "home_score",
+                    "away_score",
+                    "observed_goal_events",
+                ),
+                [(10, 123, 3, now, True, 101, 102, "A", "B", 2, 1, 3)],
+            )
+        if "latest_successful_sync_at_utc" in statement:
+            assert parameters == (1,)
+            return (("latest_successful_sync_at_utc",), [(now,)])
+        raise AssertionError(f"Unexpected query: {statement}")
+
+    harness = QueryHarness(resolve)
+    repository = SQLServerRepository(harness.connection)
+
+    rows = repository.insight_rows(1)
+    latest = repository.insight_latest_successful_sync(1)
+
+    assert rows[0]["observed_goal_events"] == 3
+    assert latest == now.replace(tzinfo=UTC)
+    statements = "\n".join(statement for statement, _ in harness.calls)
+    assert "WITH goal_counts AS" in statements
+    assert "GROUP BY mg.match_id" in statements
+    assert "mr.result_type_kind = N'After90Minutes'" in statements
 
 
 def test_repository_dashboard_summary_and_change_feed_use_deployed_schema() -> None:

@@ -73,6 +73,32 @@ class FakeRepository:
             "latest_successful_import_run_id": 3,
         }
 
+    def insight_rows(self, competition_season_id: int | None) -> list[dict[str, Any]]:
+        assert competition_season_id in {None, 1}
+        return [
+            {
+                "match_id": 10,
+                "provider_match_id": 123,
+                "matchday_number": 3,
+                "kickoff_utc": datetime(2026, 10, 20, 19, tzinfo=UTC),
+                "is_finished": True,
+                "home_team_provider_id": 101,
+                "away_team_provider_id": 102,
+                "home_team": "Alpha FC",
+                "away_team": "Beta FC",
+                "home_score": 2,
+                "away_score": 1,
+                "observed_goal_events": 3,
+            }
+        ]
+
+    def insight_latest_successful_sync(
+        self,
+        competition_season_id: int | None,
+    ) -> datetime:
+        assert competition_season_id in {None, 1}
+        return datetime(2026, 11, 3, tzinfo=UTC)
+
     def _match(self) -> dict[str, Any]:
         return {
             "match_id": 10,
@@ -264,13 +290,22 @@ def test_match_filters_are_validated_and_forwarded() -> None:
     repository = FakeRepository()
     client = TestClient(create_app(repository, _settings()))
 
-    response = client.get("/api/matches?matchday=3&finished=true&search=Alpha")
+    response = client.get("/api/matches?matchday=3&finished=true&search=Alpha&sort=kickoff-desc")
 
     assert response.status_code == 200
     assert response.json()["total"] == 1
     assert repository.last_filters["matchday"] == 3
     assert repository.last_filters["finished"] is True
     assert repository.last_filters["search"] == "Alpha"
+    assert repository.last_filters["sort"] == "kickoff-desc"
+
+
+def test_match_sort_rejects_unknown_values() -> None:
+    client = TestClient(create_app(FakeRepository(), _settings()))
+
+    response = client.get("/api/matches?sort=database-order")
+
+    assert response.status_code == 422
 
 
 def test_upcoming_fixture_filter_preserves_nullable_scores_and_missing_kickoff() -> None:
@@ -285,6 +320,7 @@ def test_upcoming_fixture_filter_preserves_nullable_scores_and_missing_kickoff()
     assert all(item["home_score"] is None for item in response.json()["items"])
     assert response.json()["items"][1]["kickoff_utc"] is None
     assert repository.last_filters["finished"] is False
+    assert repository.last_filters["sort"] == "explorer"
 
 
 def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
@@ -323,6 +359,10 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
 
     assert dashboard_response.status_code == 200
     assert "Overview" in dashboard_response.text
+    assert "Insights" in dashboard_response.text
+    assert 'href="#insights"' in dashboard_response.text
+    assert 'id="insights"' in dashboard_response.text
+    assert 'id="insights-source"' in dashboard_response.text
     assert "Match explorer" in dashboard_response.text
     assert "Change intelligence" in dashboard_response.text
     assert "Database service" not in dashboard_response.text
@@ -334,6 +374,18 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert 'id="operations"' not in dashboard_response.text
     assert 'id="last-updated"' in dashboard_response.text
     assert "Last updated" in dashboard_response.text
+    assert "/assets/styles.css?v=20261107-navigation-sort" in dashboard_response.text
+    assert "/assets/app.js?v=20261107-navigation-sort" in dashboard_response.text
+    nav_start = dashboard_response.text.index('<nav class="section-nav"')
+    nav_end = dashboard_response.text.index("</nav>", nav_start)
+    nav_markup = dashboard_response.text[nav_start:nav_end]
+    navigation_order = [
+        nav_markup.index('href="#overview"'),
+        nav_markup.index('href="#match-explorer"'),
+        nav_markup.index('href="#insights"'),
+        nav_markup.index('href="#change-intelligence"'),
+    ]
+    assert navigation_order == sorted(navigation_order)
     assert "Verified source observations" not in dashboard_response.text
     assert (
         "Local-only application. Fixture facts come from preserved OpenLigaDB observations"
@@ -352,6 +404,10 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert script_response.status_code == 200
     assert "javascript" in script_response.headers["content-type"]
     assert "/api/dashboard-summary" in script_response.text
+    assert "/api/insights/summary" in script_response.text
+    assert "/api/insights/teams" in script_response.text
+    assert "/api/insights/matchdays" in script_response.text
+    assert "latest_successful_sync_at_utc" in script_response.text
     assert "/api/match-changes" in script_response.text
     assert "latest_successful_sync_at_utc" in script_response.text
     assert 'request("/health")' not in script_response.text
@@ -362,9 +418,13 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "/api/validation-issues" not in script_response.text
     assert "loadOperations" not in script_response.text
     assert "operationsRequestId" not in script_response.text
-    assert "function sortFixtures" in script_response.text
+    assert "DASHBOARD_SECTION_ORDER" in script_response.text
+    assert "setupSectionNavigation" in script_response.text
+    assert 'setAttribute("aria-current", "location")' in script_response.text
+    assert 'sort: ui.sortSelect?.value || "explorer"' in script_response.text
     assert "function loadUpcomingFixtures" in script_response.text
     assert "finished: false" in script_response.text
+    assert 'sort: "explorer"' in script_response.text
     assert "Kickoff to be confirmed" in script_response.text
     assert "function groupChangeEvents" in script_response.text
     assert "function changeEventSummary" in script_response.text
@@ -380,17 +440,24 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "function renderChangePagination" in script_response.text
     assert "changePageSize: 25" in script_response.text
     assert "state.changeOffset >= page.total" in script_response.text
-    assert "if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;" in script_response.text
-    assert "renderFixturePage(state.fixturePage)" in script_response.text
+    assert (
+        "Recommended order: recent completed, upcoming, then older completed"
+        in script_response.text
+    )
+    assert "renderFixturePage(page)" in script_response.text
     assert "changeRequestId" in script_response.text
     assert "matchdayRequestId" in script_response.text
     assert "overviewRequestId" in script_response.text
     assert stylesheet_response.status_code == 200
     assert "text/css" in stylesheet_response.headers["content-type"]
     assert ".metric-grid" in stylesheet_response.text
+    assert ".insight-summary-grid" in stylesheet_response.text
+    assert ".insight-chart" in stylesheet_response.text
+    assert ".insight-table" in stylesheet_response.text
     assert ".upcoming-fixture" in stylesheet_response.text
     assert ".pagination" in stylesheet_response.text
     assert ".last-updated" in stylesheet_response.text
+    assert '.nav-links a[aria-current="location"]' in stylesheet_response.text
     assert ".service-card" not in stylesheet_response.text
     assert ".service-status" not in stylesheet_response.text
     assert ".operations-grid" not in stylesheet_response.text
@@ -419,6 +486,59 @@ def test_health_endpoint_remains_available_for_internal_monitoring() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "database": "available"}
+
+
+def test_insight_routes_return_typed_read_only_analytics() -> None:
+    client = TestClient(create_app(FakeRepository(), _settings()))
+
+    summary = client.get("/api/insights/summary?competition_season_id=1")
+    teams = client.get("/api/insights/teams?competition_season_id=1")
+    matchdays = client.get("/api/insights/matchdays?competition_season_id=1")
+    detail = client.get("/api/insights/teams/101?competition_season_id=1")
+
+    assert summary.status_code == 200
+    assert summary.json()["completed_matches_with_valid_final_score"] == 1
+    assert summary.json()["full_time_goals"] == 3
+    assert summary.json()["most_goals_teams"][0]["matches_played"] == 1
+    assert teams.status_code == 200
+    assert teams.json()[0]["provider_team_id"] == 101
+    assert teams.json()[0]["recent_form"] == ["W"]
+    assert matchdays.status_code == 200
+    assert matchdays.json()[0]["full_time_goals"] == 3
+    assert detail.status_code == 200
+    assert detail.json()["recent_matches"][0]["outcome"] == "W"
+
+
+def test_insights_frontend_paths_match_registered_fastapi_routes() -> None:
+    application = create_app(FakeRepository(), _settings())
+    client = TestClient(application)
+    dashboard = client.get("/")
+    script = client.get("/assets/app.js")
+
+    assert dashboard.status_code == 200
+    assert script.status_code == 200
+    registered_paths = {route.path for route in application.routes if getattr(route, "path", None)}
+    assert {
+        "/api/insights/summary",
+        "/api/insights/teams",
+        "/api/insights/matchdays",
+        "/api/insights/teams/{team_id}",
+    } <= registered_paths
+    for path in (
+        "/api/insights/summary",
+        "/api/insights/teams",
+        "/api/insights/matchdays",
+    ):
+        assert f'apiPath("{path}"' in script.text
+    assert "apiPath(`/api/insights/teams/${teamId}`" in script.text
+
+
+def test_unknown_insight_team_returns_not_found() -> None:
+    client = TestClient(create_app(FakeRepository(), _settings()))
+
+    response = client.get("/api/insights/teams/999?competition_season_id=1")
+
+    assert response.status_code == 404
 
 
 def test_dashboard_data_routes_preserve_empty_state_contracts() -> None:
