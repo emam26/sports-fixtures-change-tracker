@@ -325,6 +325,10 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "Overview" in dashboard_response.text
     assert "Match explorer" in dashboard_response.text
     assert "Change intelligence" in dashboard_response.text
+    assert "Database service" not in dashboard_response.text
+    assert "Database available" not in dashboard_response.text
+    assert 'id="health"' not in dashboard_response.text
+    assert 'class="service-card"' not in dashboard_response.text
     assert "Import &amp; sync monitor" not in dashboard_response.text
     assert 'href="#operations"' not in dashboard_response.text
     assert 'id="operations"' not in dashboard_response.text
@@ -350,6 +354,9 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "/api/dashboard-summary" in script_response.text
     assert "/api/match-changes" in script_response.text
     assert "latest_successful_sync_at_utc" in script_response.text
+    assert 'request("/health")' not in script_response.text
+    assert "loadHealth" not in script_response.text
+    assert "database service" not in script_response.text.lower()
     assert "/api/import-runs" not in script_response.text
     assert "/api/sync-checkpoints" not in script_response.text
     assert "/api/validation-issues" not in script_response.text
@@ -384,10 +391,13 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert ".upcoming-fixture" in stylesheet_response.text
     assert ".pagination" in stylesheet_response.text
     assert ".last-updated" in stylesheet_response.text
+    assert ".service-card" not in stylesheet_response.text
+    assert ".service-status" not in stylesheet_response.text
     assert ".operations-grid" not in stylesheet_response.text
     assert ".change-field-row" in stylesheet_response.text
     assert ".detail-change-event-list" in stylesheet_response.text
     assert summary_response.json()["goals_recorded"] == 74
+
     assert summary_response.json()["detected_changes"] == 1
     assert summary_response.json()["changed_fixtures"] == 1
     assert summary_response.json()["latest_successful_import_run_id"] == 3
@@ -400,6 +410,15 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
         "limit": 20,
         "offset": 0,
     }
+
+
+def test_health_endpoint_remains_available_for_internal_monitoring() -> None:
+    client = TestClient(create_app(FakeRepository(), _settings()))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "database": "available"}
 
 
 def test_dashboard_data_routes_preserve_empty_state_contracts() -> None:

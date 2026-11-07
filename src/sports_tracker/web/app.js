@@ -1,6 +1,5 @@
 const ui = {
   appAlert: document.querySelector("#app-alert"),
-  health: document.querySelector("#health"),
   competitionContext: document.querySelector("#competition-context"),
   overviewStatus: document.querySelector("#overview-status"),
   lastUpdated: document.querySelector("#last-updated"),
@@ -543,18 +542,7 @@ function sourcePill(match) {
 
 function describeRequestFailure(subject, error) {
   const suffix = error instanceof ApiRequestError && error.status ? ` (HTTP ${error.status})` : "";
-  return `${subject} could not be loaded${suffix}. Check the local API and database service.`;
-}
-
-async function loadHealth() {
-  setStatus(ui.health, "Checking availability...", "loading");
-  try {
-    await request("/health");
-    setStatus(ui.health, "Database available", "ok");
-  } catch {
-    setStatus(ui.health, "Database unavailable", "error");
-    showAppAlert("The database health check failed. The dashboard will show any data it can load.");
-  }
+  return `${subject} could not be loaded${suffix}. Check the local API and try again.`;
 }
 
 async function loadServiceStatus() {
@@ -1283,7 +1271,6 @@ async function refreshDashboard() {
   const competitionsLoaded = await loadCompetitions();
   if (competitionsLoaded) await loadMatchdays();
   await Promise.all([
-    loadHealth(),
     loadServiceStatus(),
     loadOverview(),
     loadUpcomingFixtures(),
