@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable
 from contextlib import closing
@@ -11,7 +12,6 @@ from typing import Any, Literal, Protocol
 _LOGGER = logging.getLogger(__name__)
 
 MatchSort = Literal["explorer", "kickoff-asc", "kickoff-desc"]
-ALL_MATCH_RECENT_COMPLETED_LIMIT = 5
 
 
 class Repository(Protocol):
@@ -34,6 +34,8 @@ class Repository(Protocol):
     ) -> tuple[list[dict[str, Any]], int]: ...
 
     def dashboard_summary(self, competition_season_id: int | None) -> dict[str, Any]: ...
+
+    def freshness(self, competition_season_id: int | None) -> dict[str, Any]: ...
 
     def insight_rows(self, competition_season_id: int | None) -> list[dict[str, Any]]: ...
 
@@ -195,40 +197,6 @@ class SQLServerRepository:
         total = self._read(f"SELECT COUNT_BIG(*) AS total {base}", tuple(params))[0]
         if sort == "explorer" and finished is None:
             items_sql = f"""
-                WITH filtered_matches AS (
-                    SELECT m.match_id,
-                           m.provider_match_id,
-                           m.matchday_number,
-                           m.competition_stage AS stage_name,
-                           m.kickoff_utc,
-                           m.source_match_is_finished AS is_finished,
-                           ht.team_name AS home_team,
-                           at.team_name AS away_team,
-                           final_result.home_score,
-                           final_result.away_score,
-                           m.source_last_update_utc AS last_source_update_utc,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY m.source_match_is_finished
-                               ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
-                                        m.kickoff_utc DESC,
-                                        m.provider_match_id DESC,
-                                        m.match_id DESC
-                           ) AS completed_recency_rank
-                    {base}
-                ),
-                ordered_matches AS (
-                    SELECT filtered_matches.*,
-                           CASE
-                               WHEN is_finished = 1
-                                    AND kickoff_utc IS NOT NULL
-                                    AND completed_recency_rank <=
-                                        {ALL_MATCH_RECENT_COMPLETED_LIMIT}
-                                   THEN 0
-                               WHEN is_finished = 0 THEN 1
-                               ELSE 2
-                           END AS ordering_group
-                    FROM filtered_matches
-                )
                 SELECT match_id,
                        provider_match_id,
                        matchday_number,
@@ -240,14 +208,13 @@ class SQLServerRepository:
                        home_score,
                        away_score,
                        last_source_update_utc
-                FROM ordered_matches
-                ORDER BY ordering_group,
-                         CASE WHEN kickoff_utc IS NULL THEN 1 ELSE 0 END,
-                         CASE WHEN ordering_group IN (0, 2) THEN kickoff_utc END DESC,
-                         CASE WHEN ordering_group = 1 THEN kickoff_utc END,
-                         CASE WHEN ordering_group IN (0, 2) THEN provider_match_id END DESC,
-                         CASE WHEN ordering_group = 1 THEN provider_match_id END,
-                         match_id DESC
+                {base}
+                ORDER BY CASE WHEN m.source_match_is_finished = 1 THEN 0 ELSE 1 END,
+                         CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                         CASE WHEN m.source_match_is_finished = 1 THEN m.kickoff_utc END DESC,
+                         CASE WHEN m.source_match_is_finished = 0 THEN m.kickoff_utc END,
+                         CASE WHEN m.source_match_is_finished = 1 THEN m.provider_match_id END DESC,
+                         CASE WHEN m.source_match_is_finished = 0 THEN m.provider_match_id END
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
             """
         else:
@@ -268,8 +235,7 @@ class SQLServerRepository:
                 {base}
                 ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
                          m.kickoff_utc {direction},
-                         m.provider_match_id {direction},
-                         m.match_id {direction}
+                         m.provider_match_id {direction}
                 OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
             """
         items = self._read(items_sql, (*params, offset, limit))
@@ -355,6 +321,52 @@ class SQLServerRepository:
             "latest_successful_sync_at_utc": checkpoint.get("latest_successful_sync_at_utc"),
             "latest_successful_snapshot_id": checkpoint.get("latest_successful_snapshot_id"),
             "latest_successful_import_run_id": checkpoint.get("latest_successful_import_run_id"),
+        }
+
+    def freshness(self, competition_season_id: int | None) -> dict[str, Any]:
+        predicates = [
+            "sc.last_successful_import_run_id IS NOT NULL",
+            "sc.last_processed_at_utc IS NOT NULL",
+        ]
+        params: list[Any] = []
+        if competition_season_id is not None:
+            predicates.append("sc.competition_season_id = ?")
+            params.append(competition_season_id)
+        records = self._read(
+            f"""
+            SELECT TOP (1)
+                   sc.last_processed_at_utc AS latest_successful_sync_at_utc,
+                   sc.last_successful_snapshot_id,
+                   sc.last_successful_import_run_id,
+                   ss.sha256 AS source_snapshot_sha256
+            FROM dbo.sync_checkpoints AS sc
+            LEFT JOIN dbo.source_snapshots AS ss
+                ON ss.source_snapshot_id = sc.last_successful_snapshot_id
+            WHERE {" AND ".join(predicates)}
+            ORDER BY sc.last_processed_at_utc DESC, sc.sync_checkpoint_id DESC;
+            """,
+            tuple(params),
+        )
+        if not records:
+            return {"revision": None, "latest_successful_sync_at_utc": None}
+        record = records[0]
+        timestamp = record.get("latest_successful_sync_at_utc")
+        snapshot_id = record.get("last_successful_snapshot_id")
+        import_run_id = record.get("last_successful_import_run_id")
+        snapshot_sha256 = record.get("source_snapshot_sha256")
+        if snapshot_sha256:
+            revision_material = f"{snapshot_sha256}|{competition_season_id or ''}"
+        elif timestamp is None or snapshot_id is None or import_run_id is None:
+            revision = None
+        else:
+            revision_material = f"{timestamp.isoformat()}|{snapshot_id}|{import_run_id}"
+        if snapshot_sha256 or (
+            timestamp is not None and snapshot_id is not None and import_run_id is not None
+        ):
+            revision = hashlib.sha256(revision_material.encode("utf-8")).hexdigest()
+        return {
+            "revision": revision,
+            "latest_successful_sync_at_utc": timestamp,
         }
 
     def insight_rows(self, competition_season_id: int | None) -> list[dict[str, Any]]:

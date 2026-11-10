@@ -73,6 +73,13 @@ class FakeRepository:
             "latest_successful_import_run_id": 3,
         }
 
+    def freshness(self, competition_season_id: int | None) -> dict[str, Any]:
+        assert competition_season_id in {None, 1}
+        return {
+            "revision": "revision-3",
+            "latest_successful_sync_at_utc": datetime(2026, 11, 3, tzinfo=UTC),
+        }
+
     def insight_rows(self, competition_season_id: int | None) -> list[dict[str, Any]]:
         assert competition_season_id in {None, 1}
         return [
@@ -355,6 +362,7 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     script_response = client.get("/assets/app.js")
     stylesheet_response = client.get("/assets/styles.css")
     summary_response = client.get("/api/dashboard-summary?competition_season_id=1")
+    freshness_response = client.get("/api/freshness?competition_season_id=1")
     changes_response = client.get("/api/match-changes?competition_season_id=1&limit=20")
 
     assert dashboard_response.status_code == 200
@@ -374,8 +382,8 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert 'id="operations"' not in dashboard_response.text
     assert 'id="last-updated"' in dashboard_response.text
     assert "Last updated" in dashboard_response.text
-    assert "/assets/styles.css?v=20261107-navigation-sort" in dashboard_response.text
-    assert "/assets/app.js?v=20261107-navigation-sort" in dashboard_response.text
+    assert "/assets/styles.css?v=20261107-explorer-polish" in dashboard_response.text
+    assert "/assets/app.js?v=20261107-explorer-polish" in dashboard_response.text
     nav_start = dashboard_response.text.index('<nav class="section-nav"')
     nav_end = dashboard_response.text.index("</nav>", nav_start)
     nav_markup = dashboard_response.text[nav_start:nav_end]
@@ -400,10 +408,14 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "All matches" in dashboard_response.text
     assert "Upcoming" in dashboard_response.text
     assert "Completed" in dashboard_response.text
+    assert '<option value="true" selected>Completed</option>' in dashboard_response.text
+    assert "Valid After90Minutes scores" not in dashboard_response.text
+    assert "Matches with confirmed final scores" in dashboard_response.text
     assert 'id="upcoming-list"' in dashboard_response.text
     assert script_response.status_code == 200
     assert "javascript" in script_response.headers["content-type"]
     assert "/api/dashboard-summary" in script_response.text
+    assert "/api/freshness" in script_response.text
     assert "/api/insights/summary" in script_response.text
     assert "/api/insights/teams" in script_response.text
     assert "/api/insights/matchdays" in script_response.text
@@ -423,6 +435,15 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert 'setAttribute("aria-current", "location")' in script_response.text
     assert 'sort: ui.sortSelect?.value || "explorer"' in script_response.text
     assert "function loadUpcomingFixtures" in script_response.text
+    assert "function loadFreshness" in script_response.text
+    assert 'apiPath("/api/freshness"' in script_response.text
+    assert "state.freshnessRevision" in script_response.text
+    assert "state.freshnessInitialized" in script_response.text
+    assert "updateLastUpdatedTimestamp" in script_response.text
+    assert "FRESHNESS_POLL_INTERVAL_MS = 60000" in script_response.text
+    assert "function scheduleFreshnessPoll" in script_response.text
+    assert "preserveChangePage: true" in script_response.text
+    assert "visibilitychange" in script_response.text
     assert "finished: false" in script_response.text
     assert 'sort: "explorer"' in script_response.text
     assert "Kickoff to be confirmed" in script_response.text
@@ -440,10 +461,11 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert "function renderChangePagination" in script_response.text
     assert "changePageSize: 25" in script_response.text
     assert "state.changeOffset >= page.total" in script_response.text
-    assert (
-        "Recommended order: recent completed, upcoming, then older completed"
-        in script_response.text
-    )
+    assert "Completed matches first, then upcoming fixtures" in script_response.text
+    assert 'ui.finishedSelect.value = "true"' in script_response.text
+    assert "Source updated ${formatDate(match.last_source_update_utc)}" not in script_response.text
+    assert "Source result type" not in script_response.text
+    assert "function resultTypeLabel" in script_response.text
     assert "renderFixturePage(page)" in script_response.text
     assert "changeRequestId" in script_response.text
     assert "matchdayRequestId" in script_response.text
@@ -455,8 +477,12 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert ".insight-chart" in stylesheet_response.text
     assert ".insight-table" in stylesheet_response.text
     assert ".upcoming-fixture" in stylesheet_response.text
+    assert ".fixture-card-topline" in stylesheet_response.text
+    assert ".fixture-teams" in stylesheet_response.text
+    assert ".detail-row > *" in stylesheet_response.text
     assert ".pagination" in stylesheet_response.text
     assert ".last-updated" in stylesheet_response.text
+    assert ".freshness-check" in stylesheet_response.text
     assert '.nav-links a[aria-current="location"]' in stylesheet_response.text
     assert ".service-card" not in stylesheet_response.text
     assert ".service-status" not in stylesheet_response.text
@@ -468,6 +494,11 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert summary_response.json()["detected_changes"] == 1
     assert summary_response.json()["changed_fixtures"] == 1
     assert summary_response.json()["latest_successful_import_run_id"] == 3
+    assert freshness_response.status_code == 200
+    assert freshness_response.json() == {
+        "revision": "revision-3",
+        "latest_successful_sync_at_utc": "2026-11-03T00:00:00Z",
+    }
     assert repository.last_summary_competition_id == 1
     change_page = changes_response.json()
     assert change_page["total"] == 1
@@ -523,6 +554,7 @@ def test_insights_frontend_paths_match_registered_fastapi_routes() -> None:
         "/api/insights/teams",
         "/api/insights/matchdays",
         "/api/insights/teams/{team_id}",
+        "/api/freshness",
     } <= registered_paths
     for path in (
         "/api/insights/summary",

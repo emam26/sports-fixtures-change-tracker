@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from sports_tracker.analytics import AnalyticsService
 from sports_tracker.api.models import (
     Competition,
+    DashboardFreshness,
     DashboardSummary,
     Health,
     ImportRun,
@@ -170,6 +171,13 @@ def create_app(
         competition_season_id: Annotated[int | None, Query(ge=1)] = None,
     ) -> DashboardSummary:
         return repository.dashboard_summary(competition_season_id)
+
+    @app.get("/api/freshness", response_model=DashboardFreshness)
+    def freshness(
+        repository: RepositoryDependency,
+        competition_season_id: Annotated[int | None, Query(ge=1)] = None,
+    ) -> DashboardFreshness:
+        return repository.freshness(competition_season_id)
 
     @app.get("/api/insights/summary", response_model=InsightSummary)
     def insights_summary(

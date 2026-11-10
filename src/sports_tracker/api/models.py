@@ -70,6 +70,13 @@ class DashboardSummary(ApiModel):
     latest_successful_import_run_id: int | None = None
 
 
+class DashboardFreshness(ApiModel):
+    """Small read-only revision signal for browser refresh decisions."""
+
+    revision: str | None = None
+    latest_successful_sync_at_utc: datetime | None = None
+
+
 class InsightMatch(ApiModel):
     """A completed fixture used by the read-only insights views."""
 

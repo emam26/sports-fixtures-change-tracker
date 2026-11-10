@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -191,12 +192,23 @@ def test_repository_match_ordering_is_server_side_and_deterministic() -> None:
     assert "m.provider_match_id DESC" in completed_statement
     assert "m.kickoff_utc ASC" in upcoming_statement
     assert "m.provider_match_id ASC" in upcoming_statement
-    assert "ROW_NUMBER() OVER" in all_statement
-    assert "PARTITION BY m.source_match_is_finished" in all_statement
-    assert "completed_recency_rank <=" in all_statement
-    assert "ordering_group" in all_statement
-    assert "CASE WHEN ordering_group = 1 THEN kickoff_utc END" in all_statement
-    assert all_statement.index("ORDER BY ordering_group") < all_statement.index("OFFSET")
+    assert "m.match_id DESC" not in completed_statement
+    assert "m.match_id ASC" not in upcoming_statement
+    assert "ROW_NUMBER() OVER" not in all_statement
+    assert "completed_recency_rank" not in all_statement
+    assert "CASE WHEN m.source_match_is_finished = 1 THEN 0 ELSE 1 END" in all_statement
+    assert "CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END" in all_statement
+    assert "CASE WHEN m.source_match_is_finished = 1 THEN m.kickoff_utc END DESC" in all_statement
+    assert "CASE WHEN m.source_match_is_finished = 0 THEN m.kickoff_utc END" in all_statement
+    assert (
+        "CASE WHEN m.source_match_is_finished = 1 THEN m.provider_match_id END DESC"
+        in all_statement
+    )
+    assert "CASE WHEN m.source_match_is_finished = 0 THEN m.provider_match_id END" in all_statement
+    assert "m.match_id DESC" not in all_statement
+    assert all_statement.index(
+        "ORDER BY CASE WHEN m.source_match_is_finished"
+    ) < all_statement.index("OFFSET")
 
 
 def test_repository_match_detail_uses_typed_results_and_real_goal_columns() -> None:
@@ -452,6 +464,35 @@ def test_repository_dashboard_summary_and_change_feed_use_deployed_schema() -> N
     assert "COUNT_BIG(DISTINCT mc.match_id) AS changed_fixtures" in statements
     assert "sc.competition_season_id = ?" in statements
     assert "INNER JOIN dbo.source_snapshots AS ss" in statements
+
+
+def test_repository_freshness_returns_stable_revision_without_operational_details() -> None:
+    processed = datetime(2026, 11, 3, 9, 30)
+
+    def resolve(statement: str, parameters: tuple[Any, ...]) -> ResultSet:
+        assert parameters == (1,)
+        assert "TOP (1)" in statement
+        assert "last_successful_import_run_id" in statement
+        return (
+            (
+                "latest_successful_sync_at_utc",
+                "last_successful_snapshot_id",
+                "last_successful_import_run_id",
+                "source_snapshot_sha256",
+            ),
+            [(processed, 8, 3, "a" * 64)],
+        )
+
+    harness = QueryHarness(resolve)
+    repository = SQLServerRepository(harness.connection)
+
+    freshness = repository.freshness(1)
+
+    expected_revision = hashlib.sha256(("a" * 64 + "|1").encode("utf-8")).hexdigest()
+    assert freshness == {
+        "revision": expected_revision,
+        "latest_successful_sync_at_utc": processed.replace(tzinfo=UTC),
+    }
 
 
 def test_dashboard_summary_logs_safe_component_context_on_query_failure(
