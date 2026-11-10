@@ -1,188 +1,348 @@
-# Sports Fixtures & Change Tracker
+# Codex Assignment — Professional GitHub Portfolio README
 
-A local-first Python and SQL Server application that preserves OpenLigaDB source
-responses, imports UEFA Champions League fixtures transactionally, records observed
-field-level changes, and exposes the current state through FastAPI and a plain
-HTML/CSS/JavaScript dashboard.
+Act as a senior data engineer, technical documentation specialist, and GitHub portfolio reviewer.
 
-## Current scope and evidence
+Project: Sports Fixtures & Change Tracker
 
-The implemented scope is UEFA Champions League 2026/27:
+Repository: `/mnt/f/sports-fixtures-change-tracker`
 
-- OpenLigaDB shortcut: `ucl`
-- season: `2026`
-- expected league ID: `4946`
-- configured league phase: Matchdays 1-8 (18 fixtures each; 144 expected)
-- owner-supplied current database evidence: 144 league-phase fixtures, 72 finished,
-  72 unfinished, 143 result records, 291 goal records, and 936 field-level change
-  records (not independently rerun in this handoff)
-- preserved earlier Matchday 3/4 capture evidence remains available for replay and
-  provenance review
-- later planned coverage: provider-advertised knockout-stage groups after explicit review
+## Objective
 
-The architecture keeps provider and competition identity configurable, but no other
-competition is currently claimed as implemented.
+Rewrite the root `README.md` as a polished, professional, evidence-based GitHub portfolio case study.
 
-The application does not claim that all 144 league-phase fixtures are imported. Use
-the offline coverage report and the database checks in the manual runbook after each
-capture/import batch. A missing local snapshot is a capture gap, not evidence that the
-provider lacks that matchday.
+Use the presentation quality and structure of a strong data-engineering portfolio README: informative introduction, technology badges, verified metrics, dashboard sections, engineering achievements, architecture, reproducibility, and limitations.
 
-Owner-supplied evidence confirms the project foundation, immutable raw capture, the
-deployed 12-table schema, and the current database counts listed above. Earlier
-Matchday 3/4 raw captures remain immutable observations; later source observations
-may legitimately update current rows.
-The latest offline suite, API/browser flow, live one-shot sync, and scheduled
-operation remain awaiting manual verification after the latest edits.
+This README should appeal to recruiters and engineers hiring for:
 
-## Architecture
+- Data Engineer
+- Data Solutions Engineer
+- SQL Server Developer
+- Python Developer
+- Backend/Data Integration Engineer
 
-```text
-OpenLigaDB
-  -> bounded HTTP client and conservative last-change check
-  -> immutable response.json + metadata.json under ignored data/raw/
-  -> typed parsing and validation
-  -> one SQL Server transaction for current data, changes, run status, and checkpoint
-  -> loopback FastAPI query layer
-  -> responsive, framework-free browser dashboard
-```
+Do not exaggerate the project's technical maturity.
 
-Key invariants:
+## 1. Critical evidence rule
 
-- Raw response bytes are never rewritten.
-- Provider IDs and SQL uniqueness constraints prevent duplicate domain rows.
-- An initial observation establishes a baseline; it does not invent earlier changes.
-- Future scores remain absent/`NULL`, never fabricated as zero.
-- `HalfTime`, `After90Minutes`, and other result types remain explicit.
-- Fixture, result, goal, change, successful run, and checkpoint writes commit together.
-- Failed-run provenance is attempted separately only after a confirmed rollback.
-- Local notes cannot overwrite provider-owned fixture or result data.
+**Only present completed and verified work as completed.**
 
-See [Architecture](docs/ARCHITECTURE.md) for mappings, boundaries, and limitations.
+The repository may contain code for features that have not been executed or manually validated.
 
-## Technology stack
+Code existence is not proof of successful operation.
 
-- Python 3.11+ (the owner currently uses Python 3.14)
-- `httpx`, `pyodbc` 5.3.0, `python-dotenv`
-- Microsoft SQL Server 2025 and ODBC Driver 18
-- FastAPI, Pydantic, and Uvicorn
-- pytest and Ruff
-- Plain HTML, CSS, and JavaScript
+Before drafting, inspect:
 
-## WSL setup
+- Existing root README
+- Architecture documentation
+- API documentation
+- Testing documentation
+- Build plan
+- Manual runbook
+- Current Python implementation
+- SQL schema and queries
+- Dashboard HTML/CSS/JavaScript
+- Existing screenshot directories, if any
 
-From WSL Bash:
+Cross-check every claim against repository evidence and the verified facts below.
 
-```bash
-cd /mnt/f/sports-fixtures-change-tracker
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --editable '.[dev]'
-cp .env.example .env
-```
+Never invent results, timestamps, metrics, screenshots, deployments, or successful executions.
 
-Put real local settings only in `.env`. Never commit or paste that file, a password,
-a write token, or a complete connection string. The Windows host IP visible from WSL
-can change after a WSL or network restart; reconfirm it before database operations.
+## 2. Known verified project evidence
 
-## Reproducible workflow
+Project name: Sports Fixtures & Change Tracker.
 
-Validate a saved snapshot without network or database access:
+Source: OpenLigaDB.
 
-```bash
-python scripts/evaluate_snapshot.py "<SNAPSHOT_DIRECTORY>"
-python scripts/import_snapshot.py --snapshot "<SNAPSHOT_DIRECTORY>" --dry-run
-```
+Competition identity:
 
-Import the same immutable snapshot only after the dry run succeeds:
+- UEFA Champions League 2026/27
+- Shortcut: `ucl`
+- Season: `2026`
+- Expected league ID: `4946`
 
-```bash
-python scripts/import_snapshot.py --snapshot "<SNAPSHOT_DIRECTORY>"
-```
+Previously verified SQL database state:
 
-Audit immutable local source coverage without network or database access:
+- 144 unique league-phase fixtures
+- 72 finished fixtures
+- 72 unfinished fixtures
+- 143 stored result records
+- 291 stored goal records
+- 936 historical field-level change records
 
-```bash
-python scripts/report_season_coverage.py
-```
+Previously verified API observations:
 
-Before any one-time backfill, inspect both documented provider discovery views. This
-makes HTTP requests but writes neither a raw snapshot nor the database:
+- 36 teams returned by the Insights teams endpoint
+- 8 matchdays returned by the matchdays endpoint
+- Insights summary, teams, and matchdays endpoints returned successful responses
+- Match Explorer API sorting was verified against actual stored fixtures
+- Local SQL Server connectivity succeeded
 
-```bash
-python scripts/discover_openligadb_season.py
-```
+Latest explicitly reported automated verification:
 
-Capture only matchdays the discovery command reports, then validate and import each
-immutable snapshot separately as documented in `docs/MANUAL_RUNBOOK.md`.
+- 129 tests passed
+- 1 SQL Server test deselected
+- Ruff lint passed
+- Ruff formatting passed
+- One nonblocking Starlette deprecation warning
 
-Run the local application only after database verification:
+These are historical verification observations, not claims about the current live state. Check for any newer evidence in repository documentation before deciding which evidence snapshot to report.
 
-```bash
-python scripts/run_api.py --host 127.0.0.1 --port 8000
-```
+Do not call 291 goal records "291 goals scored" unless independently proven. Do not call 936 field-level changes "936 match events" or "936 score corrections."
 
-Open `http://127.0.0.1:8000/`. Note writes are disabled by default. If explicitly
-enabled locally, they also require a separate token and remain local-only.
+## 3. Important engineering accomplishments
 
-The dashboard currently presents Overview, Match Explorer, read-only Insights, and
-Change Intelligence. Match Explorer uses server-side ordering: completed views show the
-newest known kickoff first, upcoming views show the nearest known kickoff first, and the
-All view shows every completed match in reverse kickoff order followed by upcoming
-fixtures in nearest-kickoff order. Missing kickoffs appear after known kickoffs within
-their group, with stable provider IDs as tie-breakers. Match Explorer opens with
-Completed selected; visitors can switch to All or Upcoming. The public dashboard labels
-confirmed final scores in football terms; the internal result classifications
-remain available to the importer and audit views. Unfinished or score-incomplete fixtures are
-not used to invent averages or result counts. Team metrics are analytical summaries,
-not claims about official UEFA standings or tiebreakers.
+Describe only those supported by evidence:
 
-The one-shot synchronizer is intentionally not a daemon. With no explicit matchday
-override, it reads loaded matchday/checkpoint state from SQL Server and selects only
-due work: unseen groups, unfinished fixtures near or past kickoff, recently completed
-matchdays, and older matchdays whose lower-frequency interval has elapsed. The default
-cap is three matchdays per run. `--discover` adds newly advertised provider groups
-within the configured league-phase scope; knockout-stage groups require explicit
-configuration or CLI opt-in after source-shape review:
+- Python integration with OpenLigaDB
+- Immutable raw JSON snapshots
+- Source-identity validation
+- SQL Server data modeling
+- Transactional snapshot ingestion
+- Idempotent replay
+- Match and result normalization
+- Result and goal record storage
+- Field-level change tracking
+- SQL import history and checkpoints
+- Read-only FastAPI endpoints
+- Football Insights analytics
+- Local HTML/CSS/JavaScript dashboard
+- Match Explorer filtering, sorting, and pagination
 
-```bash
-python scripts/sync_openligadb.py --discover
-```
+Explain how these components contribute to data reliability.
 
-This command makes real source requests and SQL writes. Run it only after offline,
-SQL, API, and browser checks pass. OpenLigaDB documents a 60-requests-per-minute
-limit; aggressive polling is prohibited.
+Do not describe the project as a big-data system, enterprise production deployment, or machine-learning platform.
 
-The planner is configured through `.env`: the near-kickoff window/recheck interval,
-recent-completion window/recheck interval, older-matchday interval, and per-run cap
-are named `OPENLIGADB_NEAR_KICKOFF_*`, `OPENLIGADB_RECENT_COMPLETED_*`,
-`OPENLIGADB_OLDER_MATCHDAY_INTERVAL_HOURS`, and
-`OPENLIGADB_MAX_MATCHDAYS_PER_RUN`. A scheduler should invoke this bounded command
-periodically; it must not run an infinite loop inside FastAPI. The dashboard checks
-the read-only `/api/freshness` revision once per minute while visible and refreshes
-only after a successful import revision changes.
+## 4. Matchday 2 data-quality case study
 
-## Security and local artifacts
+Include a short, accessible example of real-world source-data quality handling.
 
-`.env` and `.env.*` files other than `.env.example`, raw snapshots, runtime logs/locks, virtual
-environments, build outputs, and common SQL Server backup/data files are ignored by
-Git. Raw snapshots and local database backups must never be added manually.
+The OpenLigaDB snapshot contained contradictory HalfTime result records for match 87412:
 
-The API binds to loopback by default and returns generic unhandled-error responses.
-SQL credentials and note tokens are not returned by status endpoints or written to
-application logs.
+- Result ID 129519: 2–0
+- Result ID 129520: 0–0
 
-## Documentation
+The approved recovery policy:
 
-- [Build status and evidence](docs/BUILD_PLAN.md)
-- [Manual verification and operation](docs/MANUAL_RUNBOOK.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [API](docs/API.md)
-- [Testing strategy](docs/TESTING.md)
-- [Evaluation plan](docs/EVALUATION.md)
-- [Local scheduling](docs/DEPLOYMENT_LOCAL.md)
-- [Source notes](docs/SOURCE_NOTES.md)
-- [Commit plan](docs/COMMIT_PLAN.md)
+- Leaves strict validation as the default
+- Requires explicit opt-in for conflicting nonfinal results
+- Quarantines both conflicting halftime variants
+- Does not arbitrarily choose a score
+- Retains independently valid full-time data
+- Preserves the immutable raw snapshot
+- Records validation provenance
 
-No new lint, test, SQL, network, API, browser, scheduler, or Git result is claimed
-until the project owner supplies the corresponding manual evidence.
+Verified recovery outcome:
+
+- Matchday 2 import succeeded
+- All 144 league-phase fixtures were subsequently present
+- Match 87412 stored only its independently valid 3–3 After90Minutes result
+- Total result records reconciled to 143
+- Existing 936 field-level changes remained preserved
+
+Write this as a concise engineering achievement, not a lengthy incident report.
+
+## 5. Dashboard presentation
+
+Organize the dashboard explanation in this order:
+
+1. Overview
+2. Match Explorer
+3. Insights
+4. Change Intelligence
+
+Explain each section in plain language.
+
+Mention only working, verified behavior.
+
+The project has recently received additional UI changes, including chronological sorting, visual spacing adjustments, and automatic refresh features.
+
+Do not claim that the latest UI changes have passed browser acceptance unless you find actual evidence.
+
+Do not advertise guaranteed live scoring.
+
+### Screenshots
+
+Search for genuine dashboard screenshots already present in the repository.
+
+Only embed screenshots if:
+
+- The image file actually exists
+- The image shows the real running application
+- The represented implementation has been verified
+- No secrets or sensitive local information are visible
+- The screenshot accurately represents the documented state
+
+Use descriptive captions and meaningful image alt text.
+
+If suitable screenshots do not exist, do not invent screenshots, link to nonexistent image files, or add image placeholders.
+
+A text-only dashboard section is acceptable until verified screenshots are available.
+
+## 6. Automatic synchronization and freshness
+
+Treat this section carefully.
+
+Some scheduler-ready synchronization and browser-freshness functionality has been implemented.
+
+Previously verified:
+
+- Unit/API checks passed
+- `/api/freshness` returned a revision and timestamp
+- Repeated reads returned a stable revision
+
+Not yet proven by the supplied evidence:
+
+- End-to-end automatic synchronization
+- Successful scheduler execution
+- Actual new source updates imported automatically
+- Freshness revision changing after meaningful new data
+- Browser automatic refresh after a real synchronization
+- Public cloud deployment
+- Continuous unattended operation
+
+Do not describe these as completed production features.
+
+If necessary, explain the established manual synchronization capability and current operational limitations in the Limitations section.
+
+## 7. README structure
+
+Create an attractive but concise README using the following sections.
+
+### Title and technology badges
+
+Use Shields.io badges for relevant technologies.
+
+Avoid badges claiming successful CI, deployment, production readiness, or live operation without evidence.
+
+### Project overview
+
+Write a short, clear paragraph explaining the problem and solution.
+
+### Verified project highlights
+
+Present the verified fixture, team, result, goal-record, and field-change counts.
+
+Clearly identify the evidence snapshot and measurement definitions.
+
+### Football dashboard
+
+Explain the four sections.
+
+Embed only verified screenshots, if available.
+
+### Key engineering achievements
+
+Highlight:
+
+- Immutable snapshots
+- Transactional SQL ingestion
+- Data validation
+- Idempotent imports
+- Historical change detection
+- Source-conflict quarantine
+- Analytics APIs
+
+### Data pipeline and architecture
+
+Include a GitHub-compatible Mermaid diagram describing the implemented pipeline:
+
+OpenLigaDB → raw snapshots → validation/normalization → SQL Server → change history and analytical queries → FastAPI → dashboard.
+
+Distinguish existing manual or scheduler-ready synchronization from proven automatic cloud operation.
+
+### Data quality and validation
+
+Summarize the Matchday 2 conflict and explain safeguards.
+
+### Reproducibility and quality
+
+Use accurate setup commands and actual test evidence.
+
+Distinguish offline tests from opt-in SQL Server integration tests.
+
+Do not include credentials, private network addresses, personal Windows paths, or secrets.
+
+### Technology stack
+
+Python, SQL Server, T-SQL, pyodbc, FastAPI, OpenLigaDB, vanilla HTML/CSS/JavaScript, Ruff, pytest, Git.
+
+Use the project's actual dependency declarations where possible.
+
+### Repository guide
+
+Link to actual existing repository directories and documentation.
+
+Verify relative paths.
+
+### Limitations
+
+Explain:
+
+- OpenLigaDB is community-maintained, not an official UEFA feed
+- Data accuracy depends partly on provider records
+- Dataset represents a specific imported snapshot
+- Source timestamps can be missing or ambiguous
+- Automatic cloud operation has not been established
+- Local development is not public production hosting
+- Advanced live match-event feeds, possession and xG are not established capabilities
+
+Do not add an ambitious future roadmap presented as implemented functionality.
+
+## 8. Style requirements
+
+Use the supplied Olist README as a structural inspiration, not as content to copy.
+
+The README should be:
+
+- Professional
+- Clear
+- Visually organized
+- Concise but informative
+- Recruiter-friendly
+- Technically credible
+- Grounded in verified evidence
+
+Prefer a strong introduction, useful metrics and clear diagrams over excessive decorative badges.
+
+Avoid generic AI-sounding claims such as:
+
+- Revolutionary analytics platform
+- Enterprise-grade production infrastructure
+- Seamless real-time intelligence
+- Cutting-edge AI-driven predictions
+- Fully automated live football system
+
+Do not present unexecuted features as achievements.
+
+Use precise distinctions between matches, result rows, goal-event rows and change-history rows.
+
+## 9. Change scope
+
+**Modify only the root `README.md`.**
+
+Do not modify application code, SQL scripts, tests, project data, documentation outside the root README, or configuration.
+
+Do not delete or overwrite existing project evidence.
+
+Do not run Python, Ruff, pytest, SQL, HTTP, Git, imports, synchronization or deployment.
+
+You may inspect repository files through read-only operations.
+
+Do not commit or push.
+
+## 10. Final report
+
+After updating README.md, report:
+
+1. Sections created or revised
+2. Verified facts used
+3. Evidence source for every numerical claim
+4. Screenshots included, if any
+5. Claims deliberately omitted because they are unverified
+6. Relative links checked through inspection
+7. Any unresolved documentation inconsistencies
+8. Confirmation that only README.md was modified
+
+Mark execution-based verification as NOT RUN.
+
+Implement the README rewrite now, without touching unfinished features.
