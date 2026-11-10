@@ -67,9 +67,18 @@ const state = {
   insightSummary: null,
   insightTeams: [],
   insightMatchdays: [],
+  freshnessRevision: null,
+  freshnessInitialized: false,
+  freshnessCheckText: "Update check waiting.",
+  freshnessPollTimer: null,
+  freshnessRequestInFlight: false,
+  freshnessRetryDelayMs: 60000,
+  dashboardRefreshInFlight: false,
 };
 
 const integerFormatter = new Intl.NumberFormat();
+const FRESHNESS_POLL_INTERVAL_MS = 60000;
+const FRESHNESS_MAX_RETRY_DELAY_MS = 300000;
 
 class ApiRequestError extends Error {
   constructor(message, status = null) {
@@ -193,7 +202,14 @@ function valueOrNotSupplied(value) {
 function scoreText(homeScore, awayScore) {
   if (homeScore === null || homeScore === undefined) return "Not supplied";
   if (awayScore === null || awayScore === undefined) return "Not supplied";
-  return `${homeScore}-${awayScore}`;
+  return `${homeScore} \u2013 ${awayScore}`;
+}
+
+function resultTypeLabel(resultType) {
+  const normalized = String(resultType ?? "").toLowerCase();
+  if (normalized === "after90minutes") return "Final score";
+  if (normalized === "halftime") return "Half-time score";
+  return "Result";
 }
 
 const MATCH_FIELD_LABELS = {
@@ -219,7 +235,7 @@ const RESULT_FIELD_LABELS = {
   result_name: "Result label",
   result_order_id: "Result order",
   result_type_id: "Result type reference",
-  result_type_kind: "Result type",
+  result_type_kind: "Score stage",
 };
 
 const GOAL_FIELD_LABELS = {
@@ -297,6 +313,7 @@ function formatChangeValue(value, descriptor) {
     if (isTrue(text)) return "Finished";
     if (isFalse(text)) return "Not finished";
   }
+  if (descriptor.key === "result_type_kind") return resultTypeLabel(text);
   if (isTrue(text)) return "Yes";
   if (isFalse(text)) return "No";
   if (descriptor.key === "match_minute" && /^\d+$/.test(text)) return `${text}'`;
@@ -310,7 +327,7 @@ function formatChangeValue(value, descriptor) {
 }
 
 function changeFieldLabel(descriptor) {
-  return CHANGE_FIELD_LABELS[descriptor.scope]?.[descriptor.key] ?? "Additional source detail";
+  return CHANGE_FIELD_LABELS[descriptor.scope]?.[descriptor.key] ?? "Additional detail";
 }
 
 function groupChangeEvents(changes) {
@@ -396,22 +413,22 @@ function changeEventSummary(group) {
       if (group.kind === "removed") return "Result score removed";
       return "Result score updated";
     }
-    if (group.kind === "inserted") return "Result record added";
-    if (group.kind === "removed") return "Result record removed";
-    return "Result details updated";
+    if (group.kind === "inserted") return "Result information added";
+    if (group.kind === "removed") return "Result information removed";
+    return "Result information updated";
   }
   if (group.scope === "goal") {
     if (group.kind === "inserted") return "Goal event added";
     if (group.kind === "removed") return "Goal event removed";
     return "Goal event updated";
   }
-  return `Source information ${changeKindLabel(group.kind).toLowerCase()}`;
+  return `Match information ${changeKindLabel(group.kind).toLowerCase()}`;
 }
 
 function changeScopeLabel(scope) {
-  if (scope === "goal") return "goal field";
-  if (scope === "result") return "result field";
-  return "fixture field";
+  if (scope === "goal") return "goal detail";
+  if (scope === "result") return "result detail";
+  return "fixture detail";
 }
 
 function changeEventDescription(group) {
@@ -495,7 +512,7 @@ function changeFieldDetails(group) {
   const count = group.changes.length;
   details.append(
     element("summary", {
-      text: `Show ${formatCount(count)} recorded field ${count === 1 ? "detail" : "details"}`,
+      text: `Show ${formatCount(count)} change ${count === 1 ? "detail" : "details"}`,
     }),
   );
   const list = element("ul", { className: "change-field-list" });
@@ -571,7 +588,7 @@ async function request(path, options = {}) {
   try {
     response = await fetch(path, { ...options, headers });
   } catch {
-    throw new ApiRequestError("The local API could not be reached.");
+    throw new ApiRequestError("The local dashboard service could not be reached.");
   }
 
   if (response.status === 204) return null;
@@ -581,12 +598,12 @@ async function request(path, options = {}) {
     payload = await response.json();
   } catch {
     if (response.ok) {
-      throw new ApiRequestError("The local API returned an unreadable response.", response.status);
+      throw new ApiRequestError("The local dashboard service returned an unreadable response.", response.status);
     }
   }
 
   if (!response.ok) {
-    throw new ApiRequestError(`The local API returned HTTP ${response.status}.`, response.status);
+    throw new ApiRequestError(`The local dashboard service returned HTTP ${response.status}.`, response.status);
   }
   return payload;
 }
@@ -623,7 +640,7 @@ function sourcePill(match) {
 
 function describeRequestFailure(subject, error) {
   const suffix = error instanceof ApiRequestError && error.status ? ` (HTTP ${error.status})` : "";
-  return `${subject} could not be loaded${suffix}. Check the local API and try again.`;
+  return `${subject} could not be loaded${suffix}. Check the local dashboard service and try again.`;
 }
 
 async function loadServiceStatus() {
@@ -718,29 +735,37 @@ function renderSummary(summary) {
     setText(ui.metricChangesDetail, `Across ${formatCount(summary.changed_fixtures)} ${label}`);
   }
 
-  const lastUpdated = ui.lastUpdated;
-  lastUpdated.replaceChildren();
-  lastUpdated.append(
+  renderLastUpdated(summary.latest_successful_sync_at_utc);
+}
+
+function renderLastUpdated(timestamp, fallback = null) {
+  if (!ui.lastUpdated) return;
+  ui.lastUpdated.replaceChildren(
     element("span", { className: "last-updated-label", text: "Last updated" }),
+    element("strong", { text: timestamp ? formatDate(timestamp) : fallback || "Not recorded" }),
+    element("span", {
+      text: timestamp
+        ? "Based on the latest successful synchronization recorded by the local database."
+        : "No completed synchronization is recorded for this selection.",
+    }),
+    element("small", { className: "freshness-check", text: state.freshnessCheckText }),
   );
-  if (summary.latest_successful_sync_at_utc) {
-    lastUpdated.append(
-      element("strong", { text: formatDate(summary.latest_successful_sync_at_utc) }),
-      element("span", {
-        text: "Based on the latest successful synchronization recorded by the local database.",
-      }),
-    );
-  } else {
-    lastUpdated.append(
-      element("strong", { text: "Not recorded" }),
-      element("span", { text: "No completed synchronization is recorded for this selection." }),
-    );
-  }
+}
+
+function renderFreshnessCheck(text) {
+  state.freshnessCheckText = text;
+  const node = ui.lastUpdated?.querySelector(".freshness-check");
+  if (node) node.textContent = text;
+}
+
+function updateLastUpdatedTimestamp(timestamp) {
+  const node = ui.lastUpdated?.querySelector("strong");
+  if (node) node.textContent = timestamp ? formatDate(timestamp) : "Not recorded";
 }
 
 async function loadOverview() {
   const requestId = ++state.overviewRequestId;
-  setStatus(ui.overviewStatus, "Loading aggregate metrics from the local API...", "loading");
+  setStatus(ui.overviewStatus, "Loading the competition summary...", "loading");
   try {
     const summary = await request(
       apiPath("/api/dashboard-summary", { competition_season_id: selectedCompetitionId() }),
@@ -754,11 +779,8 @@ async function loadOverview() {
       (node) => setText(node, "—"),
     );
     setText(ui.metricChangesDetail, "Affected fixtures unavailable");
-    ui.lastUpdated.replaceChildren(
-      element("span", { className: "last-updated-label", text: "Last updated" }),
-      element("strong", { text: "Unavailable" }),
-      element("span", { text: "The latest synchronization timestamp could not be loaded." }),
-    );
+    renderLastUpdated(null, "Unavailable");
+    renderFreshnessCheck("Update check paused until the local dashboard service responds.");
     const message = describeRequestFailure("Overview metrics", error);
     setStatus(ui.overviewStatus, message, "error");
     showAppAlert(message);
@@ -773,7 +795,7 @@ function formatAverage(value) {
 function renderInsightSummary(summary) {
   setText(
     ui.insightsSource,
-    `Source: loaded local fixture records / Last updated: ${formatDate(summary.latest_successful_sync_at_utc, "Not recorded")}`,
+    `Local fixture data / Last updated: ${formatDate(summary.latest_successful_sync_at_utc, "Not recorded")}`,
   );
   setText(ui.insightGoals, formatCount(summary.full_time_goals));
   setText(
@@ -1060,7 +1082,7 @@ function renderInsightSummaryUnavailable(error) {
     ui.insightMostGoals,
     ui.insightFewestConceded,
   ].forEach((node) => setText(node, "—"));
-  setText(ui.insightsSource, "Source: unavailable / Last updated: unavailable");
+  setText(ui.insightsSource, "Fixture data unavailable / Last updated: unavailable");
   ui.insightResultBars.replaceChildren();
   renderListState(
     ui.insightHighestScoring,
@@ -1139,7 +1161,7 @@ async function loadInsights() {
     const message =
       failures.length === results.length
         ? describeRequestFailure("Insights", failures[0].reason)
-        : "Some Insights data could not be loaded. Check the local API and try again.";
+        : "Some Insights data could not be loaded. Check the local dashboard service and try again.";
     setStatus(ui.insightsStatus, message, "error");
     showAppAlert(message);
     return;
@@ -1197,7 +1219,7 @@ function renderUpcomingFixtures(page) {
   const missingKickoffs = matches.filter((match) => !match.kickoff_utc).length;
   const displayCount = `${formatCount(matches.length)} of ${formatCount(page.total)}`;
   const suffix = missingKickoffs
-    ? " Fixtures without a provider kickoff appear after scheduled fixtures."
+    ? " Fixtures without a confirmed kickoff appear after scheduled fixtures."
     : "";
   setBusy(ui.upcomingList, false);
   setStatus(
@@ -1256,10 +1278,6 @@ function fixtureCard(match) {
   const footer = element("div", { className: "fixture-footer" });
   footer.append(
     element("p", { className: "fixture-time", text: fixtureKickoffText(match) }),
-    element("p", {
-      className: "metadata",
-      text: `Source updated ${formatDate(match.last_source_update_utc)}`,
-    }),
   );
   const button = element("button", { className: "button button-card", text: "View match details" });
   button.type = "button";
@@ -1291,7 +1309,7 @@ function fixtureOrderLabel() {
   if (selectedSort === "kickoff-desc") return "Latest known kickoff first";
   if (ui.finishedSelect?.value === "true") return "Newest completed kickoff first";
   if (ui.finishedSelect?.value === "false") return "Nearest upcoming kickoff first";
-  return "Recommended order: recent completed, upcoming, then older completed";
+  return "Completed matches first, then upcoming fixtures";
 }
 
 async function loadFixtures() {
@@ -1348,7 +1366,7 @@ function renderChangePagination(total, itemCount, groupCount) {
   const last = Math.min(state.changeOffset + itemCount, total);
   const groupLabel = groupCount === 1 ? "grouped event" : "grouped events";
   const description = [
-    `Showing ${formatCount(first)}-${formatCount(last)} of ${formatCount(total)} field-level changes`,
+    `Showing ${formatCount(first)}-${formatCount(last)} of ${formatCount(total)} recorded changes`,
     `(${formatCount(groupCount)} ${groupLabel} on this page).`,
   ].join(" ");
   setText(
@@ -1364,7 +1382,7 @@ async function loadChanges({ reset = false } = {}) {
   const requestId = ++state.changeRequestId;
   setBusy(ui.changeList, true);
   setStatus(ui.changesStatus, "Loading observed changes...", "loading");
-  ui.changeList.replaceChildren(contentState("Loading change history", "Querying snapshot comparisons.", "loading"));
+  ui.changeList.replaceChildren(contentState("Loading change history", "Loading recorded fixture updates.", "loading"));
   try {
     const page = await request(
       apiPath("/api/match-changes", {
@@ -1385,7 +1403,7 @@ async function loadChanges({ reset = false } = {}) {
       renderListState(
         ui.changeList,
         "No observed fixture changes",
-        "No field-level transitions have been recorded for this competition selection.",
+        "No fixture updates have been recorded for this competition selection.",
       );
     } else {
       groups.forEach((group) => ui.changeList.append(changeCard(group)));
@@ -1394,7 +1412,7 @@ async function loadChanges({ reset = false } = {}) {
     renderChangePagination(page.total, page.items.length, groups.length);
     setStatus(
       ui.changesStatus,
-      `${formatCount(page.total)} recorded field-level change${page.total === 1 ? "" : "s"}.`,
+      `${formatCount(page.total)} recorded change${page.total === 1 ? "" : "s"}.`,
       "ok",
     );
   } catch (error) {
@@ -1408,10 +1426,9 @@ async function loadChanges({ reset = false } = {}) {
 }
 
 function resultRow(result) {
-  const row = element("li", { className: "detail-row" });
+  const row = element("li", { className: "detail-row result-row" });
+  row.append(element("strong", { text: resultTypeLabel(result.result_type) }));
   row.append(
-    element("strong", { text: result.result_type }),
-    element("span", { text: result.result_name || "Source result type" }),
     element("span", { className: "detail-score", text: scoreText(result.home_score, result.away_score) }),
   );
   return row;
@@ -1453,14 +1470,14 @@ function detailChangeSection(changes) {
     section.append(
       element("p", {
         className: "metadata",
-        text: "No field-level changes have been recorded for this fixture.",
+        text: "No fixture updates have been recorded for this fixture.",
       }),
     );
     return section;
   }
   const groups = groupChangeEvents(changes);
   const summary = [
-    `${formatCount(changes.length)} stored field-level change${changes.length === 1 ? "" : "s"}`,
+    `${formatCount(changes.length)} stored change${changes.length === 1 ? "" : "s"}`,
     `grouped into ${formatCount(groups.length)} event${groups.length === 1 ? "" : "s"}.`,
   ].join(" ");
   section.append(
@@ -1656,10 +1673,10 @@ function buildMatchDetail(match, changes, notes, issues) {
   const sporting = element("div", { className: "detail-column" });
   sporting.append(
     detailList(
-      "Typed results",
+      "Results",
       match.results,
       resultRow,
-      "No result records were supplied by the source for this fixture.",
+      "No result scores were supplied for this fixture.",
     ),
     detailList(
       "Goal events",
@@ -1726,24 +1743,74 @@ async function showMatch(matchId, openDialog = true) {
   }
 }
 
-async function refreshDashboard() {
+async function refreshDashboard({ preserveChangePage = false, checkFreshness = true } = {}) {
+  if (state.dashboardRefreshInFlight) return;
+  state.dashboardRefreshInFlight = true;
   clearAppAlert();
-  const competitionsLoaded = await loadCompetitions();
-  if (competitionsLoaded) await loadMatchdays();
-  await Promise.all([
-    loadServiceStatus(),
-    loadOverview(),
-    loadInsights(),
-    loadUpcomingFixtures(),
-    loadFixtures(),
-    loadChanges({ reset: true }),
-  ]);
+  try {
+    const competitionsLoaded = await loadCompetitions();
+    if (competitionsLoaded) await loadMatchdays();
+    await Promise.all([
+      loadServiceStatus(),
+      loadOverview(),
+      loadInsights(),
+      loadUpcomingFixtures(),
+      loadFixtures(),
+      loadChanges({ reset: !preserveChangePage }),
+    ]);
+    if (checkFreshness) await loadFreshness({ refreshOnChange: false });
+  } finally {
+    state.dashboardRefreshInFlight = false;
+  }
+}
+
+function scheduleFreshnessPoll(delay = FRESHNESS_POLL_INTERVAL_MS) {
+  if (state.freshnessPollTimer !== null) clearTimeout(state.freshnessPollTimer);
+  state.freshnessPollTimer = null;
+  if (document.hidden) return;
+  state.freshnessPollTimer = window.setTimeout(() => {
+    state.freshnessPollTimer = null;
+    void loadFreshness();
+  }, delay);
+}
+
+async function loadFreshness({ refreshOnChange = true } = {}) {
+  if (state.freshnessRequestInFlight || document.hidden) return;
+  state.freshnessRequestInFlight = true;
+  try {
+    const freshness = await request(
+      apiPath("/api/freshness", { competition_season_id: selectedCompetitionId() }),
+    );
+    const revisionChanged =
+      state.freshnessInitialized && state.freshnessRevision !== (freshness.revision ?? null);
+    state.freshnessRevision = freshness.revision ?? null;
+    state.freshnessInitialized = true;
+    updateLastUpdatedTimestamp(freshness.latest_successful_sync_at_utc);
+    state.freshnessRetryDelayMs = FRESHNESS_POLL_INTERVAL_MS;
+    renderFreshnessCheck(`Checked for updates ${formatDate(new Date())}.`);
+    if (
+      refreshOnChange &&
+      revisionChanged
+    ) {
+      await refreshDashboard({ preserveChangePage: true, checkFreshness: false });
+    }
+    scheduleFreshnessPoll();
+  } catch {
+    renderFreshnessCheck("Update check unavailable; current data remains visible.");
+    state.freshnessRetryDelayMs = Math.min(
+      state.freshnessRetryDelayMs * 2,
+      FRESHNESS_MAX_RETRY_DELAY_MS,
+    );
+    scheduleFreshnessPoll(state.freshnessRetryDelayMs);
+  } finally {
+    state.freshnessRequestInFlight = false;
+  }
 }
 
 function clearFilters() {
   ui.competitionSelect.value = "";
   ui.matchdaySelect.value = "";
-  ui.finishedSelect.value = "";
+  ui.finishedSelect.value = "true";
   ui.sortSelect.value = "explorer";
   ui.searchInput.value = "";
 }
@@ -1795,6 +1862,14 @@ function attachEventListeners() {
     state.changeOffset += state.changePageSize;
     await loadChanges();
   });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (state.freshnessPollTimer !== null) clearTimeout(state.freshnessPollTimer);
+      state.freshnessPollTimer = null;
+      return;
+    }
+    void loadFreshness();
+  });
 }
 
 function dashboardMarkupIsComplete() {
@@ -1821,9 +1896,9 @@ window.addEventListener("error", () => {
   showAppAlert("The dashboard encountered a client-side error. Reload the page and check the browser console if it persists.");
 });
 window.addEventListener("unhandledrejection", () => {
-  showAppAlert("The dashboard could not complete an asynchronous request. Check the visible panel errors and local API service.");
+  showAppAlert("The dashboard could not complete an asynchronous request. Check the visible panel errors and local dashboard service.");
 });
 
 initialize().catch(() => {
-  showAppAlert("The dashboard could not start. Reload the page after confirming the local API is running.");
+  showAppAlert("The dashboard could not start. Reload the page after confirming the local dashboard service is running.");
 });
