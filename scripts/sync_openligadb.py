@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 
 from sports_tracker.config import (
     ConfigurationError,
@@ -17,11 +18,15 @@ from sports_tracker.openligadb import (
 )
 from sports_tracker.runtime import open_sql_server_connection
 from sports_tracker.synchronization import (
+    MatchdaySelection,
+    MatchdaySyncState,
     RunLock,
     SafeJsonLogger,
     SyncAlreadyRunningError,
     SyncCoordinator,
     SyncError,
+    SyncMatchdayReader,
+    select_matchdays,
 )
 
 
@@ -60,16 +65,43 @@ def _select_matchdays(
     source,
     sync,
     client: OpenLigaDBClient,
-) -> tuple[tuple[int, ...], SeasonDiscovery | None]:
+    connection_factory,
+) -> tuple[tuple[int, ...], SeasonDiscovery | None, tuple[MatchdaySelection, ...]]:
     requested = tuple(args.matchday or ())
     if requested:
         if args.discover or args.include_post_league_phase:
             raise ConfigurationError(
                 "--matchday cannot be combined with discovery selection options"
             )
-        return _validate_matchdays(requested), None
+        matchdays = _validate_matchdays(requested)
+        return (
+            matchdays,
+            None,
+            tuple(MatchdaySelection(matchday, "explicit-cli-request", 0) for matchday in matchdays),
+        )
 
-    if args.discover or sync.discover_matchdays:
+    if sync.matchdays and not args.discover:
+        matchdays = _validate_matchdays(sync.matchdays)
+        return (
+            matchdays,
+            None,
+            tuple(
+                MatchdaySelection(matchday, "explicit-configured-matchday", 0)
+                for matchday in matchdays
+            ),
+        )
+
+    reader = SyncMatchdayReader(connection_factory)
+    states = list(
+        reader.states(
+            provider="OpenLigaDB",
+            shortcut=source.shortcut,
+            season=source.season,
+        )
+    )
+    discovery: SeasonDiscovery | None = None
+    should_discover = args.discover or (sync.discover_matchdays and not states)
+    if should_discover:
         discovery = client.discover_matchdays()
         include_post_league_phase = args.include_post_league_phase or sync.include_post_league_phase
         matchdays = discovery.candidate_matchdays
@@ -82,9 +114,41 @@ def _select_matchdays(
             raise ConfigurationError(
                 "Source discovery found no matchdays within the configured synchronization scope"
             )
-        return _validate_matchdays(matchdays), discovery
+        known = {state.matchday for state in states}
+        states.extend(
+            MatchdaySyncState(
+                matchday=matchday,
+                match_count=0,
+                unfinished_count=0,
+                nearest_unfinished_kickoff_utc=None,
+                latest_finished_kickoff_utc=None,
+                last_processed_at_utc=None,
+            )
+            for matchday in matchdays
+            if matchday not in known
+        )
 
-    return _validate_matchdays(sync.matchdays), None
+    if not states:
+        raise ConfigurationError(
+            "No stored matchdays are available; use --discover or configure OPENLIGADB_MATCHDAYS"
+        )
+
+    allowed_matchdays = set(source.expected_league_phase_matchdays)
+    if args.include_post_league_phase or sync.include_post_league_phase:
+        scoped_states = tuple(states)
+    else:
+        scoped_states = tuple(state for state in states if state.matchday in allowed_matchdays)
+    selections = select_matchdays(
+        scoped_states,
+        now_utc=datetime.now(UTC),
+        near_kickoff_window_minutes=sync.near_kickoff_window_minutes,
+        near_kickoff_recheck_minutes=sync.near_kickoff_recheck_minutes,
+        recent_completed_window_hours=sync.recent_completed_window_hours,
+        recent_completed_recheck_hours=sync.recent_completed_recheck_hours,
+        older_matchday_interval_hours=sync.older_matchday_interval_hours,
+        max_matchdays=sync.max_matchdays_per_run,
+    )
+    return tuple(selection.matchday for selection in selections), discovery, selections
 
 
 def main() -> int:
@@ -101,26 +165,35 @@ def main() -> int:
                 max_backoff_seconds=sync.backoff_max_seconds,
             ),
         )
-        matchdays, discovery = _select_matchdays(
-            args,
-            source=source,
-            sync=sync,
-            client=client,
-        )
-        if discovery is not None:
-            logger.write(
-                "sync_matchdays_discovered",
-                matchdays=matchdays,
-                available_group_matchdays=discovery.available_group_matchdays,
-                full_season_matchdays=discovery.full_season_matchdays,
-                warning_count=len(discovery.warnings),
-            )
-        coordinator = SyncCoordinator(
-            client=client,
-            connection_factory=open_sql_server_connection,
-            logger=logger,
-        )
         with RunLock(sync.lock_file):
+            matchdays, discovery, selections = _select_matchdays(
+                args,
+                source=source,
+                sync=sync,
+                client=client,
+                connection_factory=open_sql_server_connection,
+            )
+            if discovery is not None:
+                logger.write(
+                    "sync_matchdays_discovered",
+                    matchdays=matchdays,
+                    available_group_matchdays=discovery.available_group_matchdays,
+                    full_season_matchdays=discovery.full_season_matchdays,
+                    warning_count=len(discovery.warnings),
+                )
+            logger.write(
+                "sync_matchdays_selected",
+                matchdays=matchdays,
+                selection_reasons=[
+                    {"matchday": selection.matchday, "reason": selection.reason}
+                    for selection in selections
+                ],
+            )
+            coordinator = SyncCoordinator(
+                client=client,
+                connection_factory=open_sql_server_connection,
+                logger=logger,
+            )
             logger.write("sync_run_started", matchdays=matchdays)
             outcomes = coordinator.synchronize(matchdays)
     except SyncAlreadyRunningError as exc:
@@ -153,6 +226,9 @@ def main() -> int:
     if failed:
         print(f"Synchronization pass completed with {failed} failed matchday(s).")
         return 1
+    if not outcomes:
+        print("No due matchdays selected; synchronization pass completed.")
+        return 0
     print("Synchronization pass completed.")
     return 0
 

@@ -18,12 +18,16 @@ from sports_tracker.openligadb import (
 )
 from sports_tracker.snapshots import SnapshotAlreadyExistsError
 from sports_tracker.synchronization import (
+    MatchdaySelection,
+    MatchdaySyncState,
     RunLock,
     SQLCheckpointReader,
     SyncAlreadyRunningError,
     SyncCoordinator,
+    SyncMatchdayReader,
     SyncOutcome,
     preserve_sync_response,
+    select_matchdays,
 )
 
 
@@ -112,6 +116,130 @@ def test_checkpoint_reader_uses_deployed_competition_columns() -> None:
     assert "c.provider_shortcut = ?" in connection.cursor_instance.statement
     assert "cs.season_start_year = ?" in connection.cursor_instance.statement
     assert connection.cursor_instance.parameters == ("OpenLigaDB", "ucl", 2026, 3)
+
+
+def test_matchday_selector_prioritizes_windows_and_defers_recently_checked_data() -> None:
+    now = datetime(2026, 11, 7, 12, tzinfo=UTC)
+    states = (
+        MatchdaySyncState(
+            1,
+            18,
+            1,
+            datetime(2026, 11, 7, 11, 30, tzinfo=UTC),
+            None,
+            datetime(2026, 11, 7, 10, tzinfo=UTC),
+        ),
+        MatchdaySyncState(
+            2,
+            18,
+            1,
+            datetime(2026, 11, 7, 13, tzinfo=UTC),
+            None,
+            datetime(2026, 11, 7, 10, tzinfo=UTC),
+        ),
+        MatchdaySyncState(
+            3,
+            18,
+            0,
+            None,
+            datetime(2026, 11, 7, 10, tzinfo=UTC),
+            datetime(2026, 11, 7, 5, tzinfo=UTC),
+        ),
+        MatchdaySyncState(
+            4,
+            18,
+            0,
+            None,
+            datetime(2026, 10, 1, 10, tzinfo=UTC),
+            datetime(2026, 10, 31, 10, tzinfo=UTC),
+        ),
+        MatchdaySyncState(
+            5,
+            18,
+            1,
+            datetime(2026, 11, 8, 12, tzinfo=UTC),
+            None,
+            datetime(2026, 11, 7, 11, tzinfo=UTC),
+        ),
+        MatchdaySyncState(6, 18, 1, None, None, datetime(2026, 10, 1, tzinfo=UTC)),
+    )
+
+    selections = select_matchdays(
+        states,
+        now_utc=now,
+        near_kickoff_window_minutes=180,
+        near_kickoff_recheck_minutes=30,
+        recent_completed_window_hours=48,
+        recent_completed_recheck_hours=6,
+        older_matchday_interval_hours=168,
+        max_matchdays=5,
+    )
+
+    assert [(item.matchday, item.reason) for item in selections] == [
+        (1, "unfinished-match-window"),
+        (2, "near-kickoff"),
+        (6, "unfinished-kickoff-unknown"),
+        (3, "recently-completed"),
+        (4, "older-matchday-due"),
+    ]
+
+
+def test_matchday_selector_includes_unseen_discovered_groups_and_caps_work() -> None:
+    selections = select_matchdays(
+        (
+            MatchdaySyncState(7, 0, 0, None, None, None),
+            MatchdaySyncState(8, 0, 0, None, None, None),
+        ),
+        now_utc=datetime(2026, 11, 7, 12, tzinfo=UTC),
+        near_kickoff_window_minutes=180,
+        near_kickoff_recheck_minutes=30,
+        recent_completed_window_hours=48,
+        recent_completed_recheck_hours=6,
+        older_matchday_interval_hours=168,
+        max_matchdays=1,
+    )
+
+    assert selections == (MatchdaySelection(7, "unseen-discovered-matchday", 0),)
+
+
+def test_matchday_reader_uses_stored_fixture_and_checkpoint_state() -> None:
+    class Cursor:
+        description = [("matchday_number",)]
+
+        def execute(self, statement: str, parameters: tuple[object, ...]) -> None:
+            assert "dbo.sync_checkpoints" in statement
+            assert parameters == ("OpenLigaDB", "ucl", 2026)
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [
+                (
+                    3,
+                    18,
+                    0,
+                    None,
+                    datetime(2026, 11, 3, 20),
+                    datetime(2026, 11, 3, 22),
+                )
+            ]
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = Cursor()
+
+        def cursor(self) -> Cursor:
+            return self.cursor_instance
+
+        def close(self) -> None:
+            return None
+
+    states = SyncMatchdayReader(lambda: Connection()).states(
+        provider="OpenLigaDB",
+        shortcut="ucl",
+        season=2026,
+    )
+
+    assert states[0].matchday == 3
+    assert states[0].last_processed_at_utc == datetime(2026, 11, 3, 22, tzinfo=UTC)
 
 
 def test_sync_capture_preserves_exact_bytes_and_hash(tmp_path: Path) -> None:

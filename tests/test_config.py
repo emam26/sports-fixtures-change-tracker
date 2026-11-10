@@ -194,3 +194,25 @@ def test_sync_defaults_to_source_discovery_with_knockout_opt_in_disabled(tmp_pat
     assert settings.matchdays == ()
     assert settings.discover_matchdays is True
     assert settings.include_post_league_phase is False
+    assert settings.near_kickoff_window_minutes == 180
+    assert settings.near_kickoff_recheck_minutes == 30
+    assert settings.recent_completed_window_hours == 48
+    assert settings.recent_completed_recheck_hours == 6
+    assert settings.older_matchday_interval_hours == 168
+    assert settings.max_matchdays_per_run == 3
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "OPENLIGADB_NEAR_KICKOFF_WINDOW_MINUTES",
+        "OPENLIGADB_NEAR_KICKOFF_RECHECK_MINUTES",
+        "OPENLIGADB_RECENT_COMPLETED_WINDOW_HOURS",
+        "OPENLIGADB_RECENT_COMPLETED_RECHECK_HOURS",
+        "OPENLIGADB_OLDER_MATCHDAY_INTERVAL_HOURS",
+        "OPENLIGADB_MAX_MATCHDAYS_PER_RUN",
+    ],
+)
+def test_sync_selection_intervals_must_be_positive(tmp_path: Path, key: str) -> None:
+    with pytest.raises(ConfigurationError, match=key):
+        load_sync_settings(dotenv_path=tmp_path / "missing.env", environ={key: "0"})

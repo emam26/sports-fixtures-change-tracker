@@ -7,7 +7,7 @@ import os
 import socket
 from contextlib import closing
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -45,6 +45,133 @@ class SyncOutcome:
     snapshot_directory: Path | None = None
     snapshot_sha256: str | None = None
     source_last_change_utc: datetime | None = None
+
+
+@dataclass(frozen=True)
+class MatchdaySyncState:
+    """Current local evidence used to choose one matchday for a bounded run."""
+
+    matchday: int
+    match_count: int
+    unfinished_count: int
+    nearest_unfinished_kickoff_utc: datetime | None
+    latest_finished_kickoff_utc: datetime | None
+    last_processed_at_utc: datetime | None
+
+
+@dataclass(frozen=True)
+class MatchdaySelection:
+    """One selected matchday and the auditable reason it is due."""
+
+    matchday: int
+    reason: str
+    priority: int
+    reference_kickoff_utc: datetime | None = None
+
+
+def _utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def select_matchdays(
+    states: tuple[MatchdaySyncState, ...],
+    *,
+    now_utc: datetime,
+    near_kickoff_window_minutes: int,
+    near_kickoff_recheck_minutes: int,
+    recent_completed_window_hours: int,
+    recent_completed_recheck_hours: int,
+    older_matchday_interval_hours: int,
+    max_matchdays: int,
+) -> tuple[MatchdaySelection, ...]:
+    """Select due matchdays without assuming every source group needs a fetch.
+
+    Priority is: unseen matchdays, unfinished fixtures near or past kickoff,
+    recently completed fixtures, and finally older matchdays whose checkpoint is
+    outside the lower-frequency interval. The caller supplies the current UTC time
+    so the policy remains deterministic and testable.
+    """
+
+    if now_utc.tzinfo is None:
+        raise ValueError("now_utc must be timezone-aware")
+    if any(
+        value <= 0
+        for value in (
+            near_kickoff_window_minutes,
+            near_kickoff_recheck_minutes,
+            recent_completed_window_hours,
+            recent_completed_recheck_hours,
+            older_matchday_interval_hours,
+            max_matchdays,
+        )
+    ):
+        raise ValueError("synchronization selection intervals must be greater than zero")
+
+    now = now_utc.astimezone(UTC)
+    near_deadline = now + timedelta(minutes=near_kickoff_window_minutes)
+    near_recheck_cutoff = now - timedelta(minutes=near_kickoff_recheck_minutes)
+    recent_cutoff = now - timedelta(hours=recent_completed_window_hours)
+    recent_recheck_cutoff = now - timedelta(hours=recent_completed_recheck_hours)
+    older_recheck_cutoff = now - timedelta(hours=older_matchday_interval_hours)
+    selections: list[MatchdaySelection] = []
+
+    for state in states:
+        last_processed = _utc_datetime(state.last_processed_at_utc)
+        kickoff = _utc_datetime(state.nearest_unfinished_kickoff_utc)
+        latest_finished = _utc_datetime(state.latest_finished_kickoff_utc)
+
+        if state.match_count == 0 and last_processed is None:
+            selections.append(MatchdaySelection(state.matchday, "unseen-discovered-matchday", 0))
+            continue
+
+        if (
+            state.unfinished_count > 0
+            and kickoff is not None
+            and kickoff <= near_deadline
+            and (last_processed is None or last_processed <= near_recheck_cutoff)
+        ):
+            reason = "unfinished-match-window" if kickoff <= now else "near-kickoff"
+            selections.append(MatchdaySelection(state.matchday, reason, 1, kickoff))
+            continue
+
+        if (
+            state.unfinished_count > 0
+            and kickoff is None
+            and (last_processed is None or last_processed <= older_recheck_cutoff)
+        ):
+            selections.append(MatchdaySelection(state.matchday, "unfinished-kickoff-unknown", 2))
+            continue
+
+        if (
+            latest_finished is not None
+            and latest_finished >= recent_cutoff
+            and (last_processed is None or last_processed <= recent_recheck_cutoff)
+        ):
+            selections.append(
+                MatchdaySelection(state.matchday, "recently-completed", 3, latest_finished)
+            )
+            continue
+
+        if last_processed is None or last_processed <= older_recheck_cutoff:
+            selections.append(
+                MatchdaySelection(state.matchday, "older-matchday-due", 4, latest_finished)
+            )
+
+    def sort_key(selection: MatchdaySelection) -> tuple[int, datetime, int]:
+        reference = _utc_datetime(selection.reference_kickoff_utc)
+        if reference is None:
+            reference = datetime.max.replace(tzinfo=UTC)
+        if selection.priority == 3:
+            reference = datetime.max.replace(tzinfo=UTC) - (
+                reference - datetime.min.replace(tzinfo=UTC)
+            )
+        return selection.priority, reference, selection.matchday
+
+    return tuple(sorted(selections, key=sort_key)[:max_matchdays])
 
 
 class Logger(Protocol):
@@ -184,6 +311,68 @@ class SQLCheckpointReader:
             if value is not None and value.tzinfo is None:
                 return value.replace(tzinfo=UTC)
             return value
+
+
+class SyncMatchdayReader:
+    """Read local matchday state without changing the deployed schema."""
+
+    def __init__(self, connection_factory: ConnectionFactory) -> None:
+        self._connection_factory = connection_factory
+
+    def states(
+        self,
+        *,
+        provider: str,
+        shortcut: str,
+        season: int,
+    ) -> tuple[MatchdaySyncState, ...]:
+        with closing(self._connection_factory()) as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT m.matchday_number,
+                       COUNT_BIG(*) AS match_count,
+                       SUM(CASE WHEN m.source_match_is_finished = 0 THEN 1 ELSE 0 END)
+                           AS unfinished_count,
+                       MIN(CASE
+                               WHEN m.source_match_is_finished = 0
+                               THEN m.kickoff_utc
+                           END) AS nearest_unfinished_kickoff_utc,
+                       MAX(CASE
+                               WHEN m.source_match_is_finished = 1
+                               THEN m.kickoff_utc
+                           END) AS latest_finished_kickoff_utc,
+                       MAX(sc.last_processed_at_utc) AS last_processed_at_utc
+                FROM dbo.matches AS m
+                INNER JOIN dbo.competition_seasons AS cs
+                    ON cs.competition_season_id = m.competition_season_id
+                INNER JOIN dbo.competitions AS c
+                    ON c.competition_id = cs.competition_id
+                LEFT JOIN dbo.sync_checkpoints AS sc
+                    ON sc.competition_season_id = m.competition_season_id
+                   AND sc.matchday_number = m.matchday_number
+                   AND sc.provider = c.provider
+                WHERE c.provider = ?
+                  AND c.provider_shortcut = ?
+                  AND cs.season_start_year = ?
+                  AND m.matchday_number IS NOT NULL
+                GROUP BY m.matchday_number
+                ORDER BY m.matchday_number;
+                """,
+                (provider, shortcut, season),
+            )
+            rows = cursor.fetchall()
+        return tuple(
+            MatchdaySyncState(
+                matchday=int(row[0]),
+                match_count=int(row[1] or 0),
+                unfinished_count=int(row[2] or 0),
+                nearest_unfinished_kickoff_utc=_utc_datetime(row[3]),
+                latest_finished_kickoff_utc=_utc_datetime(row[4]),
+                last_processed_at_utc=_utc_datetime(row[5]),
+            )
+            for row in rows
+        )
 
 
 def preserve_sync_response(

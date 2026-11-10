@@ -89,6 +89,16 @@ def test_sync_cli_returns_nonzero_after_partial_failure(
         )
     ]
     assert events == [
+        (
+            "sync_matchdays_selected",
+            {
+                "matchdays": (3, 4),
+                "selection_reasons": [
+                    {"matchday": 3, "reason": "explicit-configured-matchday"},
+                    {"matchday": 4, "reason": "explicit-configured-matchday"},
+                ],
+            },
+        ),
         ("sync_run_started", {"matchdays": (3, 4)}),
         ("sync_run_completed", {"matchday_count": 2, "failed_matchdays": 1}),
     ]
@@ -147,8 +157,16 @@ def test_sync_cli_discovers_configured_league_phase_matchdays(
 
     class Coordinator:
         def synchronize(self, matchdays: tuple[int, ...]) -> tuple[SyncOutcome, ...]:
-            assert matchdays == tuple(range(1, 9))
+            assert matchdays == (1, 2, 3)
             return tuple(SyncOutcome(matchday, "skipped", "not newer") for matchday in matchdays)
+
+    class Reader:
+        def __init__(self, connection_factory) -> None:
+            del connection_factory
+
+        def states(self, **kwargs):
+            del kwargs
+            return ()
 
     sync_settings = SyncSettings(
         matchdays=(),
@@ -167,6 +185,7 @@ def test_sync_cli_discovers_configured_league_phase_matchdays(
     )
     monkeypatch.setattr(sync_openligadb, "load_sync_settings", lambda: sync_settings)
     monkeypatch.setattr(sync_openligadb, "OpenLigaDBClient", lambda *_args, **_kwargs: Client())
+    monkeypatch.setattr(sync_openligadb, "SyncMatchdayReader", Reader)
     monkeypatch.setattr(sync_openligadb, "SafeJsonLogger", lambda _: Logger())
     monkeypatch.setattr(sync_openligadb, "SyncCoordinator", lambda **_: Coordinator())
     monkeypatch.setattr(sys, "argv", ["sync_openligadb.py"])
@@ -177,10 +196,21 @@ def test_sync_cli_discovers_configured_league_phase_matchdays(
     assert events[0] == (
         "sync_matchdays_discovered",
         {
-            "matchdays": tuple(range(1, 9)),
+            "matchdays": (1, 2, 3),
             "available_group_matchdays": tuple(range(1, 10)),
             "full_season_matchdays": tuple(range(1, 10)),
             "warning_count": 0,
         },
     )
-    assert events[1] == ("sync_run_started", {"matchdays": tuple(range(1, 9))})
+    assert events[1] == (
+        "sync_matchdays_selected",
+        {
+            "matchdays": (1, 2, 3),
+            "selection_reasons": [
+                {"matchday": 1, "reason": "unseen-discovered-matchday"},
+                {"matchday": 2, "reason": "unseen-discovered-matchday"},
+                {"matchday": 3, "reason": "unseen-discovered-matchday"},
+            ],
+        },
+    )
+    assert events[2] == ("sync_run_started", {"matchdays": (1, 2, 3)})

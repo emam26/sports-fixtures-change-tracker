@@ -77,6 +77,12 @@ class SyncSettings:
     log_directory: Path
     discover_matchdays: bool = True
     include_post_league_phase: bool = False
+    near_kickoff_window_minutes: int = 180
+    near_kickoff_recheck_minutes: int = 30
+    recent_completed_window_hours: int = 48
+    recent_completed_recheck_hours: int = 6
+    older_matchday_interval_hours: int = 168
+    max_matchdays_per_run: int = 3
 
 
 @dataclass(frozen=True, repr=False)
@@ -383,6 +389,36 @@ def load_sync_settings(
     log_directory = str(values.get("SYNC_LOG_DIRECTORY", "data/runtime/logs")).strip()
     if not lock_file or not log_directory:
         raise ConfigurationError("Synchronization lock and log paths must not be blank")
+    near_kickoff_window_minutes = _optional_positive_int(
+        values,
+        "OPENLIGADB_NEAR_KICKOFF_WINDOW_MINUTES",
+        default=180,
+    )
+    near_kickoff_recheck_minutes = _optional_positive_int(
+        values,
+        "OPENLIGADB_NEAR_KICKOFF_RECHECK_MINUTES",
+        default=30,
+    )
+    recent_completed_window_hours = _optional_positive_int(
+        values,
+        "OPENLIGADB_RECENT_COMPLETED_WINDOW_HOURS",
+        default=48,
+    )
+    recent_completed_recheck_hours = _optional_positive_int(
+        values,
+        "OPENLIGADB_RECENT_COMPLETED_RECHECK_HOURS",
+        default=6,
+    )
+    older_matchday_interval_hours = _optional_positive_int(
+        values,
+        "OPENLIGADB_OLDER_MATCHDAY_INTERVAL_HOURS",
+        default=168,
+    )
+    max_matchdays_per_run = _optional_positive_int(
+        values,
+        "OPENLIGADB_MAX_MATCHDAYS_PER_RUN",
+        default=3,
+    )
     return SyncSettings(
         matchdays=matchdays,
         max_retries=max_retries,
@@ -400,6 +436,12 @@ def load_sync_settings(
             "OPENLIGADB_INCLUDE_POST_LEAGUE_PHASE",
             default=False,
         ),
+        near_kickoff_window_minutes=near_kickoff_window_minutes,
+        near_kickoff_recheck_minutes=near_kickoff_recheck_minutes,
+        recent_completed_window_hours=recent_completed_window_hours,
+        recent_completed_recheck_hours=recent_completed_recheck_hours,
+        older_matchday_interval_hours=older_matchday_interval_hours,
+        max_matchdays_per_run=max_matchdays_per_run,
     )
 
 
