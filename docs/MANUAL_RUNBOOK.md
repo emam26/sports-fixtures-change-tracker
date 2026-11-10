@@ -614,20 +614,22 @@ Base address: `http://127.0.0.1:8000`
    updated** matches the latest successful synchronization timestamp returned by
    `/api/dashboard-summary`, or reads `Not recorded` when no such timestamp exists.
    It must not display snapshot/import-run IDs or imply a newer source observation.
+   Confirm `/api/freshness` returns an opaque revision and that the small browser
+   check indicator is separate from the database synchronization timestamp.
 6. Open the Insights section. Confirm its cards, matchday goal trend, result split,
    team comparison, team search/sort, recent-results detail, and highest-scoring
    completed-match list are populated only from the selected local season. The UI
    must show an explicit empty/error state when analytics routes fail; it must not
-   invent scores for unfinished fixtures. The source is `After90Minutes` only, valid
+   invent scores for unfinished fixtures. The source's final-score result is used, valid
    `0-0` results count, and observed goal-event counts remain distinct from full-time
    score totals. Confirm the Insights source line uses the latest successful
    synchronization timestamp or says `Not recorded`, never a browser-generated
    refresh claim. Select a matchday bar and confirm it moves the Match Explorer to
    that loaded matchday without fabricating any fixture.
 7. Filter by matchday, status, team, and kickoff order; clear filters and confirm
-   recovery. The recommended All order must show the five most recent completed matches,
-   then nearest upcoming fixtures, then older completed matches. Completed must show
-   newest first and Upcoming nearest first. Known kickoffs must precede missing kickoffs;
+   recovery. The recommended All order must show all completed matches together from
+   newest to oldest kickoff, then nearest upcoming fixtures. Completed must show newest
+   first and Upcoming nearest first. Known kickoffs must precede missing kickoffs;
    equal kickoffs must remain deterministic. An unmatched team search must show a useful
    empty state.
 8. Open completed and unfinished fixture details. Confirm future score reads "Not
@@ -647,12 +649,21 @@ Base address: `http://127.0.0.1:8000`
    disabled and note writes return 403 in `/docs`.
 12. Stop Uvicorn with Ctrl+C.
 
+13. Leave the dashboard open while a separate manual synchronization completes.
+    Confirm the browser checks `/api/freshness` while visible, reloads the data panels
+    only after the returned revision changes, and preserves the active section,
+    Match Explorer filters/sort, and Change Intelligence page. Temporarily block the
+    freshness request in developer tools and confirm the current data remains visible
+    with a bounded retry message. Hide the tab and confirm freshness polling pauses;
+    make it visible again and confirm one check resumes.
+
 For a read-only API smoke check while Uvicorn is running, use WSL Bash in the
 project directory:
 
 ```bash
 curl --fail --silent --show-error http://127.0.0.1:8000/api/insights/summary
 curl --fail --silent --show-error http://127.0.0.1:8000/api/insights/teams
+curl --fail --silent --show-error http://127.0.0.1:8000/api/freshness
 curl --fail --silent --show-error http://127.0.0.1:8000/api/insights/matchdays
 ```
 
@@ -686,17 +697,52 @@ Caption real source/import evidence separately from synthetic change/rollback te
 ## 11. Live one-shot synchronization
 
 Prerequisite: Steps 1-10 all passed. This step makes real OpenLigaDB requests and SQL
-writes. OpenLigaDB's documented limit is 60 requests per minute.
+writes. OpenLigaDB's documented limit is 60 requests per minute. The command is a
+bounded one-shot process; it is not a daemon and must not be placed in an infinite
+FastAPI background loop.
+
+The normal scheduler-ready invocation is:
 
 Where: WSL Bash, project directory.
+
+```bash
+python scripts/sync_openligadb.py
+```
+
+The command reads local fixture/checkpoint state before selecting work. It prioritizes
+unseen groups, unfinished fixtures whose kickoff is within the configured
+`OPENLIGADB_NEAR_KICKOFF_WINDOW_MINUTES` or has passed while still unfinished, recent
+completed matchdays, and older matchdays after
+`OPENLIGADB_OLDER_MATCHDAY_INTERVAL_HOURS`. Rechecks are bounded by the configured
+near-kickoff and recent-completion intervals, and at most
+`OPENLIGADB_MAX_MATCHDAYS_PER_RUN` matchdays are selected. Missing kickoff values are
+not scheduled values. The structured `sync_matchdays_selected` event records the
+reason for every selected matchday.
+
+For a one-time source-discovery/backfill planning pass, use:
 
 ```bash
 python scripts/sync_openligadb.py --discover
 ```
 
-Expected: each matchday is imported or reliably skipped once. A failed last-change
-signal triggers a conservative full fetch. One matchday failure does not hide the
-other outcome, but the overall exit is non-zero. Do not rerun aggressively.
+Discovery compares both provider views and adds only explicit groups within the
+configured league-phase scope to the same bounded planner. For a reviewed one-time
+backfill, bypass the planner for named groups:
+
+```bash
+python scripts/sync_openligadb.py --matchday 5
+```
+
+Repeat the command with one `--matchday` per invocation when a specific backfill must
+be auditable. Do not use the manual conflict-recovery flag in synchronization; the
+known Matchday 2 conflicting HalfTime records remain strict failures and require the
+reviewed snapshot-import procedure in section 8A.
+
+Expected: each selected matchday is imported or reliably skipped once. A failed
+last-change signal triggers a conservative full fetch. One matchday failure does not
+hide another selected outcome, but the overall exit is non-zero. Exit code `3` means
+the lock was already held; no synchronization work should be repeated until the owner
+of the lock is checked. Do not rerun aggressively.
 
 Inspect logs and database state:
 
@@ -705,20 +751,22 @@ tail -n 50 data/runtime/logs/sync.jsonl
 python scripts/inspect_operations.py --limit 20
 ```
 
-Return event names, matchdays, statuses, hashes, run IDs, and timestamps only. Stop
-if a log contains any secret or if a checkpoint advances without a successful import.
+Return event names, matchdays, selection reasons, statuses, hashes, run IDs, and
+timestamps only. Stop if a log contains any secret or if a checkpoint advances
+without a successful import.
 
 ## 12. Wrapper and Task Scheduler
 
 Where: WSL Bash, project directory.
 
 ```bash
-bash scripts/run_scheduled_sync.sh --discover
+bash scripts/run_scheduled_sync.sh
 ```
 
-Expected: the same one-shot behavior and exit codes documented in
-[DEPLOYMENT_LOCAL.md](DEPLOYMENT_LOCAL.md). Do not activate a scheduled trigger until
-the wrapper passes and SQL/log evidence is reviewed.
+Expected: the same stored-state, bounded one-shot behavior and exit codes documented
+in [DEPLOYMENT_LOCAL.md](DEPLOYMENT_LOCAL.md). Use the `--discover` argument only for
+a deliberate provider-discovery/backfill pass. Do not activate a scheduled trigger
+until the wrapper passes and SQL/log evidence is reviewed.
 
 Where: Windows PowerShell.
 

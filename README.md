@@ -128,16 +128,22 @@ enabled locally, they also require a separate token and remain local-only.
 The dashboard currently presents Overview, Match Explorer, read-only Insights, and
 Change Intelligence. Match Explorer uses server-side ordering: completed views show the
 newest known kickoff first, upcoming views show the nearest known kickoff first, and the
-All view shows the five most recent completed matches, upcoming fixtures, then older
-completed matches. Insights use valid completed `After90Minutes` scores from the
-selected local season; unfinished or score-incomplete fixtures are not used to
-invent averages or result counts. Team metrics are analytical summaries, not claims
-about official UEFA standings or tiebreakers.
+All view shows every completed match in reverse kickoff order followed by upcoming
+fixtures in nearest-kickoff order. Missing kickoffs appear after known kickoffs within
+their group, with stable provider IDs as tie-breakers. Match Explorer opens with
+Completed selected; visitors can switch to All or Upcoming. The public dashboard labels
+confirmed final scores in football terms; the internal result classifications
+remain available to the importer and audit views. Unfinished or score-incomplete fixtures are
+not used to invent averages or result counts. Team metrics are analytical summaries,
+not claims about official UEFA standings or tiebreakers.
 
-The one-shot synchronizer is intentionally not a daemon. By default it discovers
-provider-advertised groups and limits itself to configured league-phase matchdays;
-knockout-stage groups require explicit configuration or CLI opt-in after source-shape
-review:
+The one-shot synchronizer is intentionally not a daemon. With no explicit matchday
+override, it reads loaded matchday/checkpoint state from SQL Server and selects only
+due work: unseen groups, unfinished fixtures near or past kickoff, recently completed
+matchdays, and older matchdays whose lower-frequency interval has elapsed. The default
+cap is three matchdays per run. `--discover` adds newly advertised provider groups
+within the configured league-phase scope; knockout-stage groups require explicit
+configuration or CLI opt-in after source-shape review:
 
 ```bash
 python scripts/sync_openligadb.py --discover
@@ -146,6 +152,15 @@ python scripts/sync_openligadb.py --discover
 This command makes real source requests and SQL writes. Run it only after offline,
 SQL, API, and browser checks pass. OpenLigaDB documents a 60-requests-per-minute
 limit; aggressive polling is prohibited.
+
+The planner is configured through `.env`: the near-kickoff window/recheck interval,
+recent-completion window/recheck interval, older-matchday interval, and per-run cap
+are named `OPENLIGADB_NEAR_KICKOFF_*`, `OPENLIGADB_RECENT_COMPLETED_*`,
+`OPENLIGADB_OLDER_MATCHDAY_INTERVAL_HOURS`, and
+`OPENLIGADB_MAX_MATCHDAYS_PER_RUN`. A scheduler should invoke this bounded command
+periodically; it must not run an infinite loop inside FastAPI. The dashboard checks
+the read-only `/api/freshness` revision once per minute while visible and refreshes
+only after a successful import revision changes.
 
 ## Security and local artifacts
 

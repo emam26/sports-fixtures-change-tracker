@@ -15,6 +15,7 @@ responses, bounded pagination (`limit <= 200`), and generic unhandled-error resp
 | GET | `/api/competitions` | Loaded competition seasons |
 | GET | `/api/matchdays` | Loaded matchday counts and kickoff ranges |
 | GET | `/api/dashboard-summary` | Aggregate fixture, goal, change, and checkpoint facts |
+| GET | `/api/freshness` | Stable revision for successful imported data |
 | GET | `/api/insights/summary` | Season-scoped scoring and result summary |
 | GET | `/api/insights/teams` | Stable provider-team performance summaries |
 | GET | `/api/insights/matchdays` | Matchday goal and result analytics |
@@ -46,6 +47,16 @@ the deployed tables. If one component fails, the local server logs only the logi
 operation name and exception type; it never logs SQL parameters, SQL text, connection
 details, tokens, or credentials.
 
+`GET /api/freshness` accepts the same optional `competition_season_id` and performs
+one small read against successful synchronization checkpoints. Its `revision` is an
+opaque SHA-256 value derived from the latest successful raw snapshot content hash
+and selected season, so replaying identical source bytes does not force a browser
+reload; it is `null` when no successful checkpoint exists. The browser
+compares this value and reloads data only after it changes. The response's
+`latest_successful_sync_at_utc` remains the database synchronization timestamp, not a
+provider source timestamp or the time the browser checked the endpoint. The dashboard
+may update its timestamp label from this field without reloading unchanged data.
+
 The Insights endpoints accept optional `competition_season_id`. They use only an
 authoritative `After90Minutes` result with two non-null scores on a provider-finished
 fixture. Unfinished fixtures, quarantined/conflicting results, and score-incomplete
@@ -70,11 +81,10 @@ half-time value for `After90Minutes`.
 Use `finished=false` for Upcoming records, `finished=true` for Completed records, or
 omit the parameter for All matches. The default `sort=explorer` order is newest completed
 matches first for a Completed filter, nearest upcoming kickoff first for an Upcoming
-filter, and, for All matches, the five most recent completed matches, then upcoming
-fixtures, then older completed matches. Within every group, known kickoffs precede
-unknown values; kickoff time and stable provider match ID provide deterministic ordering.
-The five-match recent window is an explicit product rule, not a database insertion-order
-assumption. `sort=kickoff-asc` and `sort=kickoff-desc` remain available for callers that
+filter, and, for All matches, every completed match in reverse kickoff order followed
+by upcoming fixtures in nearest-kickoff order. Within each status group, known kickoffs
+precede unknown values; kickoff time and stable provider match ID provide deterministic
+ordering. `sort=kickoff-asc` and `sort=kickoff-desc` remain available for callers that
 need a simple global kickoff order. Sorting is applied in SQL before `offset`/`limit`.
 A missing kickoff is preserved as `null`; clients must present it as unscheduled/to be
 confirmed rather than inventing a date or labelling it postponed without provider evidence.
@@ -124,6 +134,12 @@ records in chronological UTC order. This is a presentation of imported database 
 not a claim that every scheduled provider fixture has already been captured. A missing
 kickoff remains `null` and is shown as needing confirmation; the API does not invent
 postponed or rescheduled status values.
+
+The browser checks `/api/freshness` once per minute while the tab is visible. A
+temporary freshness failure does not erase loaded data; the browser retries with a
+bounded backoff. When the revision changes, the existing API-backed panels reload
+without changing the active section, Match Explorer filters/sort, or Change
+Intelligence page. The browser never starts synchronization or writes SQL.
 
 ## Errors and security
 

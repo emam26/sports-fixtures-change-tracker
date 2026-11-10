@@ -676,14 +676,13 @@ tracks the active section with `aria-current="location"`, including hash navigat
 IntersectionObserver updates. The dashboard assets use a new version so the navigation
 and ordering changes are not hidden by an earlier browser cache entry.
 
-Match Explorer now sends a validated `sort` value to the API. The default `explorer` sort
-is applied in SQL before pagination: Completed filters use newest known kickoff first;
-Upcoming filters use nearest known kickoff first; and All filters use five recent
-completed fixtures, then upcoming fixtures, then older completed fixtures. Known kickoff
-times precede missing values and stable provider match IDs, followed by internal match IDs,
-make ties deterministic. Explicit `kickoff-asc` and `kickoff-desc` options preserve a
-simple global kickoff order for callers that need it. Unfinished matches remain upcoming;
-the UI does not introduce a LIVE state.
+Match Explorer now sends a validated `sort` value to the API. At this handoff the
+default `explorer` sort was applied in SQL before pagination: Completed filters used
+newest known kickoff first; Upcoming filters used nearest known kickoff first; and All
+filters used a five-match recent-completed window. That temporary All-view rule is
+superseded by the completed-first timeline recorded below. Explicit `kickoff-asc` and
+`kickoff-desc` options preserve a simple global kickoff order for callers that need it.
+Unfinished matches remain upcoming; the UI does not introduce a LIVE state.
 
 Changed files:
 
@@ -700,3 +699,93 @@ Changed files:
 
 No project code, tests, Ruff, SQL, HTTP requests, synchronization, database migration,
 Git operation, or data mutation was executed for this handoff. All checks are **NOT RUN**.
+
+### 2026-11-07 Phase 2 automatic synchronization and freshness (NOT RUN)
+
+The Phase 2 implementation extends the existing one-shot synchronizer instead of
+adding a daemon or changing the deployed 12-table schema. A scheduler-ready run now
+acquires the existing atomic lock before planning, source discovery, or import. With
+no explicit matchday override, it reads the loaded season's matchday aggregates and
+successful checkpoint timestamps from SQL Server and chooses only due work:
+
+1. unseen provider-advertised matchdays;
+2. unfinished fixtures within the configured near-kickoff window, including fixtures
+   whose kickoff has passed while the provider still marks them unfinished;
+3. recently completed matchdays for delayed scores/corrections; and
+4. older matchdays after the lower-frequency interval elapses.
+
+Known/missing kickoff values never become fabricated schedule times. A configurable
+per-run cap prevents repeatedly fetching all eight league-phase groups. `--discover`
+compares both existing provider discovery views and adds newly advertised groups to
+the same bounded planner; explicit `--matchday` remains the auditable backfill path.
+Selection reasons are written to the safe structured sync log. The existing last-
+change signal, immutable snapshot writer, transactional importer, checkpoint update,
+bounded retry policy, and lock behavior remain in use. The Matchday 2 conflicting
+HalfTime policy remains strict for synchronization; its narrow quarantine option is
+still manual-only.
+
+The API now exposes `GET /api/freshness`, a small read-only response containing an
+opaque revision derived from the latest successful raw snapshot content hash and
+selected season, plus that checkpoint's successful synchronization time. Identical
+source-byte replays therefore do not force a browser refresh. It does not expose
+source poll time or credentials. The browser polls this endpoint once
+per minute while visible, pauses while hidden, retries with bounded backoff, and
+reloads existing API panels only after the revision changes. Automatic refresh keeps
+the active section, fixture filters/sort, selected team, and change-feed page; it
+never starts ingestion or writes SQL.
+
+Files changed for this handoff:
+
+- `.env.example` — conservative scheduler selection and recheck settings;
+- `src/sports_tracker/config.py` — validated synchronization interval and run-cap
+  settings;
+- `src/sports_tracker/synchronization.py` — SQL-backed matchday state reader and
+  deterministic due-work selector;
+- `scripts/sync_openligadb.py` — lock-scoped selection, discovery merge, selection
+  logging, and scheduler-ready default behavior;
+- `src/sports_tracker/api/models.py`, `src/sports_tracker/api/repository.py`, and
+  `src/sports_tracker/api/app.py` — freshness revision contract;
+- `src/sports_tracker/web/app.js`, `src/sports_tracker/web/index.html`, and
+  `src/sports_tracker/web/styles.css` — visibility-aware revision polling and
+  state-preserving dashboard refresh;
+- `tests/test_config.py`, `tests/test_synchronization.py`, `tests/test_sync_cli.py`,
+  `tests/test_api.py`, and `tests/test_api_repository.py` — selection, freshness,
+  locking, and frontend/API contract coverage;
+- `README.md`, `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT_LOCAL.md`,
+  `docs/MANUAL_RUNBOOK.md`, and `docs/TESTING.md` — operational and design guidance.
+
+No Python, Ruff, pytest, SQL, API request, source synchronization, database import,
+browser session, scheduler configuration, Git command, commit, or push was executed
+for this handoff. All new checks and the existing release checks remain **NOT RUN**.
+The user-supplied prior baseline of 119 non-SQL tests is not evidence for this
+working tree. No schema, raw snapshot, `.env`, credential, or existing database row
+was modified.
+
+### 2026-11-07 Match Explorer timeline and public-label polish (NOT RUN)
+
+The previous five-match recent-results shortcut was removed. The public Match Explorer
+now opens with Completed selected. Completed results remain one continuous group ordered
+from newest to oldest known kickoff; upcoming fixtures remain a separate status group
+ordered from nearest to farthest known kickoff in All view. Missing kickoffs are placed
+last within their status group, and provider match IDs provide deterministic tie-breakers.
+The SQL ordering remains server-side and is applied before `OFFSET`/`FETCH` pagination.
+The explicit kickoff ascending/descending API sorts remain available.
+
+Match cards no longer expose the source-update metadata row. Team names, scores, status,
+and matchday labels now have explicit spacing and responsive wrapping. Public result
+labels use `Final score` and `Half-time score`; the provider's internal result values
+remain unchanged in storage, validation, and audit data. The Insights metric now uses
+the human-readable `Matches with confirmed final scores` label.
+
+Changed files: `src/sports_tracker/api/repository.py`,
+`src/sports_tracker/web/index.html`, `src/sports_tracker/web/app.js`,
+`src/sports_tracker/web/styles.css`, `tests/test_api.py`,
+`tests/test_api_repository.py`, `README.md`, `docs/API.md`,
+`docs/ARCHITECTURE.md`, `docs/DEPLOYMENT_LOCAL.md`, `docs/MANUAL_RUNBOOK.md`,
+and `docs/TESTING.md`.
+
+No project code, tests, Ruff, SQL, database operations, HTTP requests, source
+synchronization, browser session, or Git operation was executed for this handoff.
+All checks are **NOT RUN**. The next manual step is to run the offline lint/format/test
+checks, then perform the browser ordering and responsive-layout checklist in
+`docs/MANUAL_RUNBOOK.md`.

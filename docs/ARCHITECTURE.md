@@ -151,12 +151,27 @@ and a deliberate policy before implementation.
 ## Incremental synchronization
 
 The synchronizer performs one bounded pass and is not a daemon. An atomic file lock
-prevents overlapping local runs. It can discover provider-advertised matchdays before
-the pass, limits default selection to the configured league phase, and keeps
-post-league-phase groups opt-in. It skips a full matchday fetch only when a reliable,
-timezone-aware last-change signal is not newer than the committed SQL checkpoint.
-Unsupported, empty, malformed, failed, or timezone-ambiguous signals conservatively
-force a full fetch.
+is acquired before matchday planning, source discovery, or import, so overlapping
+workers fail before they can perform synchronization work. With no explicit
+`--matchday` or `OPENLIGADB_MATCHDAYS` override, the planner reads loaded fixture
+matchdays and their successful checkpoint times from SQL Server. It prioritizes
+unseen groups, unfinished fixtures at or within the configurable near-kickoff window,
+recently completed matchdays, and finally older matchdays whose lower-frequency
+interval has elapsed. A per-run cap prevents repeatedly fetching the complete season.
+Missing kickoff values are never treated as scheduled times. A matchday with no
+stored fixture rows is eligible only when provider discovery explicitly identifies it.
+
+The optional `--discover` command compares the provider's available-groups and
+full-season views, adds newly advertised groups within the configured scope to the
+planner, and records the selection reason in the structured log. Explicit matchday
+arguments remain the safe one-time backfill path. The planner does not infer that a
+fixture is finished because its kickoff has passed.
+
+After a selected matchday is fetched, the existing reliable timezone-aware last-change
+signal is compared with the committed SQL checkpoint. Unsupported, empty, malformed,
+failed, or timezone-ambiguous signals conservatively force a full fetch. The known
+Matchday 2 conflicting `HalfTime` records remain strict-import failures; only the
+reviewed manual snapshot command may enable the narrow quarantine policy.
 
 Fetched responses use the same canonical immutable snapshot writer as manual Stage 1
 capture. A failed import leaves the captured evidence available for offline replay.
@@ -176,7 +191,7 @@ column names directly. Nullable database scores remain nullable in API responses
 Unhandled failures return a generic response and log only the exception type.
 
 The API provides health/status, competition-season and matchday discovery, a
-season-scoped dashboard aggregate, fixture list/detail, explicit results and goals,
+season-scoped dashboard aggregate, a lightweight freshness revision, fixture list/detail, explicit results and goals,
 per-fixture and cross-fixture field changes with source-snapshot provenance, import
 runs, validation issues, synchronization checkpoints, local-note CRUD, and a
 read-only analytics surface for season, team, and matchday insights.
@@ -202,13 +217,17 @@ The framework-free public dashboard has four API-backed sections in this order: 
 Match Explorer, Insights, and Change Intelligence. Overview presents a small **Last updated** value
 from `latest_successful_sync_at_utc`; it is the timestamp of the latest successful
 synchronization recorded by the database, not evidence of a more recent source poll.
+The freshness endpoint returns an opaque revision derived from the latest successful
+raw snapshot content hash and selected season. Identical source-byte replays therefore
+do not force a browser reload, while the browser's own check time remains a separate
+client-side fact.
 It also presents a compact Upcoming fixtures list sourced from unfinished local
 records and ordered by reliable UTC kickoff, with records lacking a kickoff placed
 last and labelled as to be confirmed. The dashboard discovers loaded competition
 seasons and matchdays, filters All matches, Upcoming, and Completed fixture views,
-uses SQL-side Match Explorer ordering before pagination (five recent completed fixtures,
-then upcoming, then older completed fixtures for the default All view), orders nullable
-kickoffs deterministically, distinguishes missing scores, presents
+uses SQL-side Match Explorer ordering before pagination (all completed fixtures in
+reverse kickoff order, then upcoming fixtures in nearest-kickoff order for the default
+All view), orders nullable kickoffs deterministically, distinguishes missing scores, presents
 explicit result/goal types and snapshot provenance, and optionally manages local notes. Every
 section starts with a visible loading shell and renders an explicit empty or safe
 failure state. Source text is assigned with `textContent`, not HTML injection.
@@ -251,8 +270,9 @@ manual workflow; the application does not self-migrate the deployed database.
 - Last-change endpoint semantics require continued empirical auditing against later
   full fetches.
 - Automatic provider-side rate-limit discovery is absent; retries are bounded and
-  scheduling frequency remains an operator responsibility. The documented 60 RPM
-  limit is a ceiling, not a polling target.
+  scheduler frequency remains an operator responsibility. The documented 60 RPM
+  limit is a ceiling, not a polling target. The browser freshness poll does not
+  initiate source or SQL writes.
 - Current full league-phase provider availability has not been verified in this
   working tree. The discovery and coverage code is **NOT RUN** until the owner
   performs the documented manual checks.

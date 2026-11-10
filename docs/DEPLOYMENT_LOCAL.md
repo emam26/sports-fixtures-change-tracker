@@ -54,10 +54,13 @@ Then verify the following against only real local records:
    **Last updated** indicator must show only the timestamp from the latest successful
    synchronization recorded by the database, or `Not recorded` when none exists. It
    must not imply a newer source poll or expose snapshot/import-run identifiers.
+   Confirm `/api/freshness` returns an opaque revision and that the browser's update
+   check time is shown separately from the database synchronization time.
 3. Team search, matchday, All matches/Upcoming/Completed filters, kickoff order, and
    Clear change the fixture board without fabricated scores. The recommended All order
-   is the five most recent completed matches, then upcoming fixtures, then older
-   completed matches; Completed and Upcoming use newest and nearest kickoff first.
+   keeps all completed matches together in newest-to-oldest kickoff order, followed by
+   upcoming fixtures in nearest-kickoff order; Completed and Upcoming use newest and
+   nearest kickoff first respectively. Missing kickoffs remain last within their group.
    Future scores must display
    `Not supplied`; fixtures without a reliable provider kickoff must remain last and
    read `Kickoff to be confirmed`, not a fabricated date or unsupported postponement.
@@ -97,6 +100,13 @@ provider `source_time_zone_id` must not be used to infer an offset, and an ambig
 source update time must remain absent/unconverted rather than being presented as a
 precise local timestamp.
 
+10. Leave the dashboard open while a separate one-shot sync completes. The browser
+    should request `/api/freshness` only while the tab is visible, reload data after
+    the revision changes, and preserve the active section, Match Explorer filters,
+    sort, pagination, selected team, and Change Intelligence page. Block the
+    freshness request to verify the current dashboard remains visible and retries
+    conservatively.
+
 Stop and return the failing browser console message or non-secret network response if
 an asset fails to load, an API response is malformed, or a panel remains in its loading
 state. Do not expose the service beyond loopback while diagnosing it.
@@ -107,6 +117,7 @@ Where: WSL Bash, project directory, while the local API is running.
 
 ```bash
 curl --fail --silent --show-error http://127.0.0.1:8000/api/dashboard-summary
+curl --fail --silent --show-error http://127.0.0.1:8000/api/freshness
 ```
 
 Expected: a `200` JSON object with fixture, finished, upcoming, goal, field-change
@@ -115,6 +126,10 @@ plus nullable latest-checkpoint fields. Stop if this returns HTTP 500; return
 only the non-secret server log line containing `Dashboard summary read failed` and its
 operation/error type. Do not return SQL parameters, a connection string, or `.env`
 content.
+
+The freshness response should be a `200` JSON object with `revision` and
+`latest_successful_sync_at_utc`; the revision may be `null` before any successful
+import. It is a change signal, not a source timestamp.
 
 For the read-only analytics layer, also inspect the selected local season:
 
@@ -134,12 +149,14 @@ only and does not alter SQL data.
 Where: WSL Bash, same directory. This performs real HTTP and SQL operations.
 
 ```bash
-bash scripts/run_scheduled_sync.sh --discover
+bash scripts/run_scheduled_sync.sh
 ```
 
-Expected: one bounded pass. The script is not a daemon and does not poll. It uses the
-project `.venv`, the Python process lock, bounded retries, canonical immutable source
-capture, and structured logs under ignored `data/runtime/`.
+Expected: one bounded pass based on stored matchday/checkpoint state. The script is
+not a daemon and does not poll. It uses the project `.venv`, the Python process lock,
+bounded retries, canonical immutable source capture, and structured logs under
+ignored `data/runtime/`. Use `bash scripts/run_scheduled_sync.sh --discover` only
+for a deliberate source-discovery/backfill planning pass.
 
 Exit codes:
 
@@ -151,6 +168,17 @@ Exit codes:
 OpenLigaDB documents 60 requests per minute. Use a conservative interval, such as 30
 minutes only during relevant periods and a wider interval otherwise. Never treat the
 limit as a target or run repeated manual polling.
+
+## Future cloud scheduler (not implemented)
+
+No cloud worker or public deployment is configured. A future scheduler should invoke
+the same bounded command as a single exclusive job, keep SQL credentials and provider
+configuration in a secret manager, preserve immutable snapshots in durable private
+storage, and retain the structured logs and import/checkpoint evidence. It must keep
+the existing lock or an equivalent distributed lease, enforce the configured retry
+and rate-limit budget, and expose health/failure alerts without exposing raw source
+payloads or secrets. The browser freshness endpoint is read-only and must never be
+used as a scheduler trigger or write path.
 
 ## Windows Task Scheduler preparation
 

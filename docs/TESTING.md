@@ -37,10 +37,12 @@ covers:
   diagnostics;
 - overlap locking, deployed-schema checkpoint lookup, conservative last-change
   fallback, canonical sync capture, continuation after a partial failure, duplicate
-  matchday rejection, and non-zero partial-failure CLI exit;
+  matchday rejection, stored matchday selection windows, bounded per-run selection,
+  and non-zero partial-failure CLI exit;
 - API validation (including non-positive resource IDs), nullable score serialization,
   generic failure responses, note authorization/update/archive, status/matchday/
-  checkpoint routes, dashboard summary event-versus-fixture counts, and paged
+  checkpoint routes, dashboard summary event-versus-fixture counts, freshness revision,
+  and paged
   cross-fixture change provenance; read-only Insights summary, team, matchday, and
   team-detail response contracts;
 - pure analytics rules for authoritative final scores, valid 0-0 results, unfinished
@@ -51,15 +53,17 @@ covers:
   requests/containers; field-level change provenance, human-readable grouped change
   summaries, absence of raw field-name rendering, change-feed pagination controls,
   stale-response guards, deterministic null-kickoff ordering, and favicon
-  declaration; exact Insights frontend-to-FastAPI route registration; alongside the
+  declaration; exact Insights and freshness frontend-to-FastAPI route registration,
+  revision-triggered refresh contracts, and visibility-polling behavior; alongside the
   browser-only loading, empty, failure, keyboard, and
   narrow-layout checks in the manual runbook;
 - All matches/Upcoming/Completed filter contracts, nullable-score upcoming responses,
   deterministic null-kickoff ordering, and Overview's chronological upcoming list;
 - Match Explorer navigation order, server-side completed/upcoming/All ordering, the
-  explicit five-match recent-completed window, null-kickoff placement, provider-ID
-  tie-breakers, sort-before-pagination SQL, and preservation of team/matchday/search
-  filters;
+  complete completed-first All view, null-kickoff placement, provider-ID tie-breakers,
+  sort-before-pagination SQL, and preservation of team/matchday/search
+  filters; the Completed default, removal of source-update card placeholders, and
+  human-readable final-score labels;
 - repository SQL mapping against the actual deployed table/column names, dashboard
   aggregate/change queries, and note transaction behavior;
 - CLI configuration propagation for offline snapshot evaluation.
