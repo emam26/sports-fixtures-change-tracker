@@ -789,3 +789,37 @@ synchronization, browser session, or Git operation was executed for this handoff
 All checks are **NOT RUN**. The next manual step is to run the offline lint/format/test
 checks, then perform the browser ordering and responsive-layout checklist in
 `docs/MANUAL_RUNBOOK.md`.
+
+### 2026-11-11 Phase 1 independent security review (NOT RUN)
+
+The public-readonly route gate was reviewed in `src/sports_tracker/api/app.py`,
+the deployment invariants in `src/sports_tracker/config.py`, and the regression
+coverage in `tests/test_api.py` and `tests/test_config.py`. The review found no
+authenticated write, synchronization, administrative, or documentation route
+reachable through the public allowlist. `/api/status` exposes only status and
+deployment-mode flags; it does not expose credentials or database connection
+details. Local mode and its internal health route remain available through the
+existing local configuration path.
+
+One confirmed edge case was fixed: if an ASGI scope omitted `raw_path`, the
+allowlist previously fell back to Starlette's decoded URL path. Public matching
+now fails closed when the raw path is unavailable, preventing encoded-path
+normalization from becoming an allowlist bypass. A regression test covers the
+missing-`raw_path` case. The `ApplicationSettings` value object now enforces the
+same deployment invariant as the environment loader: local mode must retain
+loopback protection, while public-readonly mode must explicitly disable local
+only access and note writes. Directly injected unsafe settings are rejected.
+
+Changed files: `src/sports_tracker/api/app.py`, `src/sports_tracker/config.py`,
+`tests/test_api.py`, `tests/test_config.py`, and this file. The API test helper
+now uses a loopback client address for valid local-mode settings injection. No
+schema, raw snapshot, `.env`, credential, or database row was modified.
+
+Remaining limitations are operational: public mode has no authentication,
+rate-limiting, request-size policy, or edge proxy protection, and public change
+responses intentionally include non-secret snapshot/import provenance needed by
+the dashboard. These require deployment controls or a later security phase.
+
+No Python, tests, Ruff, SQL, database operation, HTTP request, synchronization,
+deployment, or Git operation was executed for this review. All execution checks
+remain **NOT RUN**.
