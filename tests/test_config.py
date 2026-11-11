@@ -3,9 +3,11 @@ from pathlib import Path
 import pytest
 
 from sports_tracker.config import (
+    ApplicationSettings,
     ConfigurationError,
     DatabaseSettings,
     build_connection_string,
+    load_application_settings,
     load_database_settings,
     load_openligadb_settings,
     load_sync_settings,
@@ -89,6 +91,108 @@ def test_settings_repr_redacts_password() -> None:
 
     assert "unit-test-password" not in repr(settings)
     assert "<redacted>" in repr(settings)
+
+
+def test_application_settings_default_to_local_mode(tmp_path: Path) -> None:
+    settings = load_application_settings(
+        dotenv_path=tmp_path / "missing.env",
+        environ={},
+    )
+
+    assert settings.deployment_mode == "local"
+    assert settings.local_only is True
+    assert settings.allow_note_writes is False
+
+
+def test_public_readonly_mode_requires_explicit_safe_configuration(tmp_path: Path) -> None:
+    settings = load_application_settings(
+        dotenv_path=tmp_path / "missing.env",
+        environ={
+            "API_DEPLOYMENT_MODE": "public_readonly",
+            "API_LOCAL_ONLY": "no",
+            "API_ALLOW_NOTE_WRITES": "no",
+        },
+    )
+
+    assert settings.deployment_mode == "public_readonly"
+    assert settings.local_only is False
+    assert settings.allow_note_writes is False
+
+
+@pytest.mark.parametrize(
+    "local_only, allow_note_writes, notes_write_token, deployment_mode",
+    [
+        (False, False, None, "local"),
+        (True, True, None, "local"),
+        (True, True, "short", "local"),
+        (True, False, None, "public_readonly"),
+        (False, True, "a-secure-local-token", "public_readonly"),
+        (False, False, "a-secure-local-token", "public_readonly"),
+        (False, False, None, "unexpected"),
+    ],
+)
+def test_direct_application_settings_reject_invalid_combinations(
+    local_only: bool,
+    allow_note_writes: bool,
+    notes_write_token: str | None,
+    deployment_mode: str,
+) -> None:
+    with pytest.raises(ConfigurationError):
+        ApplicationSettings(
+            local_only=local_only,
+            allow_note_writes=allow_note_writes,
+            notes_write_token=notes_write_token,
+            deployment_mode=deployment_mode,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "environment, message",
+    [
+        (
+            {"API_LOCAL_ONLY": "no"},
+            "API_DEPLOYMENT_MODE",
+        ),
+        (
+            {
+                "API_DEPLOYMENT_MODE": "public_readonly",
+                "API_LOCAL_ONLY": "yes",
+            },
+            "API_LOCAL_ONLY",
+        ),
+        (
+            {
+                "API_DEPLOYMENT_MODE": "public_readonly",
+                "API_LOCAL_ONLY": "no",
+                "API_ALLOW_NOTE_WRITES": "yes",
+                "API_NOTES_WRITE_TOKEN": "a-secure-token-with-enough-length",
+            },
+            "API_ALLOW_NOTE_WRITES",
+        ),
+        (
+            {
+                "API_DEPLOYMENT_MODE": "public_readonly",
+                "API_LOCAL_ONLY": "no",
+                "API_NOTES_WRITE_TOKEN": "not-used-in-public-mode",
+            },
+            "API_NOTES_WRITE_TOKEN",
+        ),
+        (
+            {"API_DEPLOYMENT_MODE": "internet"},
+            "API_DEPLOYMENT_MODE",
+        ),
+    ],
+)
+def test_invalid_public_mode_configuration_fails_closed(
+    tmp_path: Path,
+    environment: dict[str, str],
+    message: str,
+) -> None:
+    with pytest.raises(ConfigurationError, match=message):
+        load_application_settings(
+            dotenv_path=tmp_path / "missing.env",
+            environ=environment,
+        )
 
 
 def test_load_openligadb_settings_from_environment(tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
@@ -15,6 +16,9 @@ from dotenv import dotenv_values
 
 class ConfigurationError(ValueError):
     """Raised when the local database configuration is missing or invalid."""
+
+
+ApplicationDeploymentMode = Literal["local", "public_readonly"]
 
 
 @dataclass(frozen=True, repr=False)
@@ -87,17 +91,37 @@ class SyncSettings:
 
 @dataclass(frozen=True, repr=False)
 class ApplicationSettings:
-    """Validated local API security settings."""
+    """Validated API deployment and note-write security settings."""
 
     local_only: bool
     allow_note_writes: bool
     notes_write_token: str | None
+    deployment_mode: ApplicationDeploymentMode = "local"
+
+    def __post_init__(self) -> None:
+        if self.deployment_mode not in {"local", "public_readonly"}:
+            raise ConfigurationError("API_DEPLOYMENT_MODE must be local or public_readonly")
+        if self.deployment_mode == "local" and not self.local_only:
+            raise ConfigurationError("local mode requires API_LOCAL_ONLY=yes")
+        if self.deployment_mode == "public_readonly" and (
+            self.local_only or self.allow_note_writes or self.notes_write_token is not None
+        ):
+            raise ConfigurationError(
+                "public_readonly mode requires API_LOCAL_ONLY=no and note writes disabled"
+            )
+        if self.allow_note_writes and (
+            self.notes_write_token is None or len(self.notes_write_token) < 16
+        ):
+            raise ConfigurationError(
+                "API_NOTES_WRITE_TOKEN must contain at least 16 characters when writes are enabled"
+            )
 
     def __repr__(self) -> str:
         return (
             "ApplicationSettings("
             f"local_only={self.local_only!r}, "
             f"allow_note_writes={self.allow_note_writes!r}, "
+            f"deployment_mode={self.deployment_mode!r}, "
             "notes_write_token='<redacted>')"
         )
 
@@ -449,17 +473,28 @@ def load_application_settings(
     dotenv_path: str | Path | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> ApplicationSettings:
-    """Load local-only API and note-write authorization settings."""
+    """Load and validate API deployment and note-write authorization settings."""
 
     values = _merged_values(dotenv_path, environ)
+    deployment_mode = str(values.get("API_DEPLOYMENT_MODE", "local")).strip().lower()
+    if deployment_mode not in {"local", "public_readonly"}:
+        raise ConfigurationError("API_DEPLOYMENT_MODE must be local or public_readonly")
     local_only = _boolean_value(values, "API_LOCAL_ONLY", default=True)
     allow_note_writes = _boolean_value(
         values,
         "API_ALLOW_NOTE_WRITES",
         default=False,
     )
+    if deployment_mode == "local" and not local_only:
+        raise ConfigurationError("API_LOCAL_ONLY=no requires API_DEPLOYMENT_MODE=public_readonly")
+    if deployment_mode == "public_readonly" and local_only:
+        raise ConfigurationError("public_readonly mode requires API_LOCAL_ONLY=no")
+    if deployment_mode == "public_readonly" and allow_note_writes:
+        raise ConfigurationError("public_readonly mode requires API_ALLOW_NOTE_WRITES=no")
     token_value = values.get("API_NOTES_WRITE_TOKEN")
     token = None if token_value is None else str(token_value).strip() or None
+    if deployment_mode == "public_readonly" and token is not None:
+        raise ConfigurationError("public_readonly mode requires API_NOTES_WRITE_TOKEN to be blank")
     if allow_note_writes and (token is None or len(token) < 16):
         raise ConfigurationError(
             "API_NOTES_WRITE_TOKEN must contain at least 16 characters when writes are enabled"
@@ -468,6 +503,7 @@ def load_application_settings(
         local_only=local_only,
         allow_note_writes=allow_note_writes,
         notes_write_token=token,
+        deployment_mode=deployment_mode,
     )
 
 

@@ -3,6 +3,7 @@
 import hmac
 import ipaddress
 import logging
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -51,6 +52,29 @@ from sports_tracker.runtime import open_sql_server_connection
 
 _LOGGER = logging.getLogger(__name__)
 
+_PUBLIC_READONLY_EXACT_PATHS = frozenset(
+    {
+        "/",
+        "/assets/app.js",
+        "/assets/styles.css",
+        "/api/status",
+        "/api/competitions",
+        "/api/matchdays",
+        "/api/matches",
+        "/api/dashboard-summary",
+        "/api/freshness",
+        "/api/insights/summary",
+        "/api/insights/teams",
+        "/api/insights/matchdays",
+        "/api/match-changes",
+    }
+)
+_PUBLIC_READONLY_PATH_PATTERNS = (
+    re.compile(r"/api/insights/teams/[1-9][0-9]*"),
+    re.compile(r"/api/matches/[1-9][0-9]*"),
+    re.compile(r"/api/matches/[1-9][0-9]*/changes"),
+)
+
 
 def _is_loopback(host: str | None) -> bool:
     if not host:
@@ -61,6 +85,35 @@ def _is_loopback(host: str | None) -> bool:
         return host.lower() == "localhost"
 
 
+def _request_path(request: Request) -> str | None:
+    """Return an ASCII, unescaped path for exact public-route matching."""
+
+    raw_path = request.scope.get("raw_path")
+    if not isinstance(raw_path, bytes):
+        return None
+    try:
+        raw_text = raw_path.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    path = raw_text.split("?", 1)[0]
+    if "%" in path:
+        return None
+    return path
+
+
+def _is_public_readonly_request(request: Request) -> bool:
+    """Allow only the exact GET paths required by the public dashboard."""
+
+    if request.method != "GET":
+        return False
+    path = _request_path(request)
+    if path is None:
+        return False
+    if path in _PUBLIC_READONLY_EXACT_PATHS:
+        return True
+    return any(pattern.fullmatch(path) for pattern in _PUBLIC_READONLY_PATH_PATTERNS)
+
+
 def create_app(
     repository: Repository | None = None,
     settings: ApplicationSettings | None = None,
@@ -68,11 +121,13 @@ def create_app(
     app_settings = settings or load_application_settings()
     repo = repository or SQLServerRepository(open_sql_server_connection)
     web_directory = Path(__file__).resolve().parent.parent / "web"
+    public_readonly = app_settings.deployment_mode == "public_readonly"
     app = FastAPI(
         title="Sports Fixtures & Change Tracker",
         version="0.1.0",
-        docs_url="/docs",
+        docs_url=None if public_readonly else "/docs",
         redoc_url=None,
+        openapi_url=None if public_readonly else "/openapi.json",
     )
     app.state.repository = repo
     app.state.settings = app_settings
@@ -87,7 +142,9 @@ def create_app(
         )
 
     @app.middleware("http")
-    async def local_only(request: Request, call_next):
+    async def access_policy(request: Request, call_next):
+        if public_readonly and not _is_public_readonly_request(request):
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
         client_host = request.client.host if request.client else None
         if app_settings.local_only and not _is_loopback(client_host):
             return Response(

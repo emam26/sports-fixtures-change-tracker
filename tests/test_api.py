@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi.testclient import TestClient
 
-from sports_tracker.api.app import create_app
+from sports_tracker.api.app import _is_public_readonly_request, create_app
 from sports_tracker.config import ApplicationSettings
 
 
@@ -287,15 +288,38 @@ class FakeRepository:
 
 def _settings(*, writes: bool = False) -> ApplicationSettings:
     return ApplicationSettings(
-        local_only=False,
+        local_only=True,
         allow_note_writes=writes,
         notes_write_token="a-secure-local-token" if writes else None,
     )
 
 
+def _public_settings() -> ApplicationSettings:
+    return ApplicationSettings(
+        local_only=False,
+        allow_note_writes=False,
+        notes_write_token=None,
+        deployment_mode="public_readonly",
+    )
+
+
+def _test_client(application: Any, **kwargs: Any) -> TestClient:
+    return TestClient(application, client=("127.0.0.1", 8000), **kwargs)
+
+
+def test_application_factory_accepts_valid_local_settings_injection() -> None:
+    settings = _settings()
+
+    application = create_app(FakeRepository(), settings)
+
+    assert application.state.settings is settings
+    assert application.state.settings.deployment_mode == "local"
+    assert application.state.settings.local_only is True
+
+
 def test_match_filters_are_validated_and_forwarded() -> None:
     repository = FakeRepository()
-    client = TestClient(create_app(repository, _settings()))
+    client = _test_client(create_app(repository, _settings()))
 
     response = client.get("/api/matches?matchday=3&finished=true&search=Alpha&sort=kickoff-desc")
 
@@ -308,7 +332,7 @@ def test_match_filters_are_validated_and_forwarded() -> None:
 
 
 def test_match_sort_rejects_unknown_values() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     response = client.get("/api/matches?sort=database-order")
 
@@ -317,7 +341,7 @@ def test_match_sort_rejects_unknown_values() -> None:
 
 def test_upcoming_fixture_filter_preserves_nullable_scores_and_missing_kickoff() -> None:
     repository = FakeRepository()
-    client = TestClient(create_app(repository, _settings()))
+    client = _test_client(create_app(repository, _settings()))
 
     response = client.get("/api/matches?finished=false&limit=6")
 
@@ -331,7 +355,7 @@ def test_upcoming_fixture_filter_preserves_nullable_scores_and_missing_kickoff()
 
 
 def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings(writes=True)))
+    client = _test_client(create_app(FakeRepository(), _settings(writes=True)))
 
     status_response = client.get("/api/status")
     matchdays_response = client.get("/api/matchdays?competition_season_id=1")
@@ -342,7 +366,7 @@ def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
     assert status_response.status_code == 200
     assert status_response.json() == {
         "status": "ok",
-        "local_only": False,
+        "local_only": True,
         "note_writes_enabled": True,
     }
     assert "token" not in status_response.text.lower()
@@ -354,9 +378,103 @@ def test_status_matchdays_and_checkpoints_are_exposed_without_secrets() -> None:
     assert validation_issues_response.json() == []
 
 
+def test_public_readonly_mode_allows_only_dashboard_get_routes() -> None:
+    client = _test_client(create_app(FakeRepository(), _public_settings()))
+
+    allowed_paths = (
+        "/",
+        "/assets/app.js?cache=public",
+        "/assets/styles.css",
+        "/api/status",
+        "/api/competitions",
+        "/api/matchdays",
+        "/api/matches",
+        "/api/matches/10",
+        "/api/matches/10/changes",
+        "/api/dashboard-summary",
+        "/api/freshness",
+        "/api/insights/summary",
+        "/api/insights/teams",
+        "/api/insights/teams/101",
+        "/api/insights/matchdays",
+        "/api/match-changes",
+    )
+
+    for path in allowed_paths:
+        response = client.get(path)
+        assert response.status_code == 200, path
+
+    assert client.get("/api/status").json() == {
+        "status": "ok",
+        "local_only": False,
+        "note_writes_enabled": False,
+    }
+
+
+def test_public_readonly_mode_denies_internal_and_unapproved_paths() -> None:
+    repository = FakeRepository()
+    client = _test_client(create_app(repository, _public_settings()))
+
+    denied_paths = (
+        "/health",
+        "/api/sync-checkpoints",
+        "/api/import-runs",
+        "/api/validation-issues",
+        "/api/matches/10/notes",
+        "/api/notes/1",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/unknown",
+        "/api/matches/",
+        "/api/matches/%31%30",
+        "/api/matches/10%2Fchanges",
+    )
+
+    for path in denied_paths:
+        assert client.get(path).status_code == 404, path
+
+    for method in ("post", "put", "patch", "delete", "options", "head"):
+        response = getattr(client, method)("/api/matches/10")
+        assert response.status_code == 404, method
+
+    response = client.post(
+        "/api/matches/10/notes",
+        json={"note_text": "must not be written", "created_by": "public"},
+        headers={"X-Notes-Token": "a-secure-local-token"},
+    )
+    assert response.status_code == 404
+    assert repository.note["note_text"] == "Review lineup"
+
+
+def test_public_readonly_allowlist_fails_closed_without_raw_path() -> None:
+    request = SimpleNamespace(method="GET", scope={"path": "/api/matches/10"})
+
+    assert not _is_public_readonly_request(request)
+
+
+def test_public_readonly_mode_returns_generic_errors_without_internal_details() -> None:
+    class BrokenRepository(FakeRepository):
+        def competitions(self) -> list[dict[str, Any]]:
+            raise RuntimeError("PWD=secret; C:\\private\\database; SQL text")
+
+    client = _test_client(
+        create_app(BrokenRepository(), _public_settings()),
+        raise_server_exceptions=False,
+    )
+
+    response = client.get("/api/competitions")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "The request could not be completed."}
+    assert "secret" not in response.text
+    assert "private" not in response.text
+    assert "SQL text" not in response.text
+
+
 def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     repository = FakeRepository()
-    client = TestClient(create_app(repository, _settings()))
+    client = _test_client(create_app(repository, _settings()))
 
     dashboard_response = client.get("/")
     script_response = client.get("/assets/app.js")
@@ -511,7 +629,7 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
 
 
 def test_health_endpoint_remains_available_for_internal_monitoring() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     response = client.get("/health")
 
@@ -520,7 +638,7 @@ def test_health_endpoint_remains_available_for_internal_monitoring() -> None:
 
 
 def test_insight_routes_return_typed_read_only_analytics() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     summary = client.get("/api/insights/summary?competition_season_id=1")
     teams = client.get("/api/insights/teams?competition_season_id=1")
@@ -542,7 +660,7 @@ def test_insight_routes_return_typed_read_only_analytics() -> None:
 
 def test_insights_frontend_paths_match_registered_fastapi_routes() -> None:
     application = create_app(FakeRepository(), _settings())
-    client = TestClient(application)
+    client = _test_client(application)
     dashboard = client.get("/")
     script = client.get("/assets/app.js")
 
@@ -566,7 +684,7 @@ def test_insights_frontend_paths_match_registered_fastapi_routes() -> None:
 
 
 def test_unknown_insight_team_returns_not_found() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     response = client.get("/api/insights/teams/999?competition_season_id=1")
 
@@ -601,7 +719,7 @@ def test_dashboard_data_routes_preserve_empty_state_contracts() -> None:
     repository.matches = empty_matches  # type: ignore[method-assign]
     repository.dashboard_summary = empty_summary  # type: ignore[method-assign]
     repository.match_changes = empty_changes  # type: ignore[method-assign]
-    client = TestClient(create_app(repository, _settings()))
+    client = _test_client(create_app(repository, _settings()))
 
     assert client.get("/api/matches").json() == {
         "items": [],
@@ -619,7 +737,7 @@ def test_dashboard_data_routes_preserve_empty_state_contracts() -> None:
 
 
 def test_match_detail_preserves_typed_results() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     response = client.get("/api/matches/10")
 
@@ -630,7 +748,7 @@ def test_match_detail_preserves_typed_results() -> None:
 
 
 def test_match_change_history_keeps_field_level_data_and_provenance() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     response = client.get("/api/matches/10/changes")
 
@@ -668,7 +786,7 @@ def test_match_detail_accepts_genuinely_missing_result_and_goal_scores() -> None
         return record
 
     repository.match = nullable_match  # type: ignore[method-assign]
-    response = TestClient(create_app(repository, _settings())).get("/api/matches/10")
+    response = _test_client(create_app(repository, _settings())).get("/api/matches/10")
 
     assert response.status_code == 200
     assert response.json()["results"][0]["home_score"] is None
@@ -676,7 +794,7 @@ def test_match_detail_accepts_genuinely_missing_result_and_goal_scores() -> None
 
 
 def test_missing_match_is_404() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     response = client.get("/api/matches/999")
 
@@ -684,7 +802,7 @@ def test_missing_match_is_404() -> None:
 
 
 def test_non_positive_path_ids_are_rejected_before_repository_access() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     responses = [
         client.get("/api/matches/0"),
@@ -697,7 +815,7 @@ def test_non_positive_path_ids_are_rejected_before_repository_access() -> None:
 
 
 def test_note_writes_are_disabled_by_default() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings()))
+    client = _test_client(create_app(FakeRepository(), _settings()))
 
     response = client.post(
         "/api/matches/10/notes",
@@ -708,7 +826,7 @@ def test_note_writes_are_disabled_by_default() -> None:
 
 
 def test_note_write_requires_correct_token() -> None:
-    client = TestClient(create_app(FakeRepository(), _settings(writes=True)))
+    client = _test_client(create_app(FakeRepository(), _settings(writes=True)))
     body = {"note_text": "Review lineup", "created_by": "tester"}
 
     rejected = client.post("/api/matches/10/notes", json=body)
@@ -725,7 +843,7 @@ def test_note_write_requires_correct_token() -> None:
 
 def test_note_update_and_archive_require_token_and_preserve_soft_delete() -> None:
     repository = FakeRepository()
-    client = TestClient(create_app(repository, _settings(writes=True)))
+    client = _test_client(create_app(repository, _settings(writes=True)))
     headers = {"X-Notes-Token": "a-secure-local-token"}
 
     updated = client.put(
@@ -750,7 +868,7 @@ def test_unhandled_repository_error_returns_generic_response() -> None:
         raise RuntimeError("internal SQL detail; PWD=not-a-real-secret")
 
     repository.matches = fail  # type: ignore[method-assign]
-    client = TestClient(
+    client = _test_client(
         create_app(repository, _settings()),
         raise_server_exceptions=False,
     )
