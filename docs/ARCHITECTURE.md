@@ -262,7 +262,9 @@ compares complete source and target key sets, stops on mismatches or target-only
 and rolls back its target transaction on failure. Cloud synchronization writes and verifies
 private S3-compatible snapshot objects before import. Missing credentials or an unavailable
 object store fail before checkpoint advancement. Local disk is staging only and is not treated as
-a Render/GitHub archive.
+a Render/GitHub archive. `scripts/audit_snapshots.py` inventories local response/metadata
+pairs without database or cloud access; its optional SQL Server reconciliation is read-only
+and distinguishes unreferenced local evidence from missing or corrupt database references.
 
 ## Deployed schema assumptions
 

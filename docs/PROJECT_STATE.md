@@ -22,7 +22,33 @@ operational procedures remain in the linked documents.
   compare complete source/target key sets, report target counts before apply, and roll
   back target transactions on failure. Raw-object database rollback cannot undo an object
   upload; safe orphan review remains an owner gate.
+- `scripts/audit_snapshots.py` and `sports_tracker.snapshot_audit` provide an offline,
+  deterministic local inventory. Optional `--sqlserver` reconciliation is explicit and
+  read-only; it distinguishes valid, corrupt, missing-referenced, path/hash-mismatch,
+  and unreferenced-local evidence without deduplicating repeated retrievals.
+- Snapshot object uploads now clean up every object created by the failed attempt while
+  preserving pre-existing objects; migration preview/apply rejects unsafe local-path
+  relationships, target-only snapshot rows, and target hash/size/locator mismatches.
 - New offline regression coverage for these boundaries is written but has not been run.
+
+## Owner-verified evidence
+
+The latest owner-run verification reported:
+
+- Offline verification: **209 passed, 2 deselected**, with one non-blocking
+  Starlette deprecation warning.
+- Ruff lint: **PASS**.
+- Ruff formatting: **PASS**, 78 files.
+- Git whitespace validation: **PASS**.
+- Local snapshot audit: **PASS**, 17 valid pairs and 4 duplicate response-hash groups.
+- SQL Server snapshot reconciliation: **PASS**; 14 database-referenced snapshots,
+  0 missing referenced snapshots, 0 corrupt referenced snapshots, and 3
+  unreferenced local capture directories.
+- Historical Neon parity: **12/12 tables MATCH**.
+
+The three unreferenced local capture directories are retained evidence and must be
+independently accounted for. A database-driven object-storage migration must not be
+assumed to include them. Object storage and deployment remain **NOT YET VERIFIED**.
 
 ## Evidence boundary
 
@@ -40,6 +66,10 @@ SQL Server evidence remains historical evidence only.
 4. Run raw snapshot reconciliation and review any durable object orphan before retrying.
 5. Create separate least-privilege Neon login roles and secret-scoped GitHub/Render settings.
 6. Execute the staged offline, SQL, cloud, and browser checks in the runbook.
+
+The local audit must run before the object-storage migration. `17` local pairs versus
+`14` database rows is not itself evidence that three files are disposable; review the
+explicit reconciliation categories and preserve all distinct retrievals.
 
 ## Next owner action
 

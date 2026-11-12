@@ -782,6 +782,27 @@ The user-supplied prior baseline of 119 non-SQL tests is not evidence for this
 working tree. No schema, raw snapshot, `.env`, credential, or existing database row
 was modified.
 
+### 2026-11-12 Historical snapshot readiness (NOT RUN)
+
+Added a read-only local snapshot inventory at `scripts/audit_snapshots.py` backed by
+`src/sports_tracker/snapshot_audit.py`. It reports pair completeness, metadata and
+response hashes/byte counts, identity/path mismatches, duplicate response hashes,
+matchday summaries, and optional SQL Server `source_snapshots` reconciliation. The
+default mode does not load database, cloud, or network settings; JSON reports are
+blocked from being written under `data/raw`.
+
+Hardened `scripts/migrate_snapshots_to_object_storage.py` to reject mismatched local
+response/metadata paths, target-only PostgreSQL snapshot rows, target byte-count/hash
+mismatches, and to report possible object orphans after a database rollback. Hardened
+`src/sports_tracker/storage.py` cleanup to track both response and metadata objects
+created by a failed upload while preserving pre-existing objects.
+
+Added offline inventory, reconciliation, migration transaction, partial-object, and
+retry regression tests. These tests and all lint/format checks are **NOT RUN**. No raw
+snapshot, `.env`, credential, database row, object-storage object, workflow schedule,
+or cloud resource was modified. Manual order and stop conditions are in
+`docs/MANUAL_RUNBOOK.md`.
+
 ### 2026-11-07 Match Explorer timeline and public-label polish (NOT RUN)
 
 The previous five-match recent-results shortcut was removed. The public Match Explorer

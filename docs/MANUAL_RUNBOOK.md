@@ -11,6 +11,28 @@ command in this runbook was executed by Codex. Run in order, stop at the first
 failure, and return only non-secret output. Never paste `.env`, passwords, tokens,
 complete connection strings, or raw response content.
 
+## Latest owner-verified evidence
+
+The owner reported the following completed checks:
+
+- Offline verification: **209 passed, 2 deselected**, with one non-blocking
+  Starlette deprecation warning.
+- Ruff lint: **PASS**.
+- Ruff formatting: **PASS**, 78 files.
+- Git whitespace validation: **PASS**.
+- Local snapshot audit: **PASS**, with 17 valid snapshot pairs and 4 duplicate
+  response-hash groups.
+- SQL Server snapshot reconciliation: **PASS**; 14 database-referenced snapshots,
+  0 missing referenced snapshots, and 0 corrupt referenced snapshots.
+- Three local capture directories are unreferenced by the database. They must be
+  retained and independently accounted for; do not assume the database-driven cloud
+  migration includes them.
+- Historical Neon parity: **12/12 tables MATCH**.
+
+Object storage and deployment remain **NOT YET VERIFIED**. The evidence above does
+not authorize an object-storage upload, migration apply, scheduled synchronization,
+or deployment.
+
 ## 1. Environment and editable installation
 
 Where: WSL Bash  
@@ -1001,6 +1023,99 @@ The workflow schedule is twice per hour at UTC minutes 17 and 47. GitHub may del
 drop scheduled events; this is best-effort synchronization, not a real-time guarantee.
 OpenLigaDB's 60-requests-per-minute limit remains in force, and aggressive polling is
 prohibited. No cloud command, migration, synchronization, or deployment was run here.
+
+## 13.8 Historical raw-snapshot audit and object-storage gate
+
+The local audit is offline by default. It recursively scans the configured directory,
+preserves each retrieval as evidence, validates metadata/byte counts/hashes, reports
+malformed or incomplete pairs, duplicate response hashes, and a matchday summary. A
+duplicate response hash is not a deduplication instruction: distinct retrieval
+directories remain separate provenance records.
+
+Where: WSL Bash, project directory.
+
+```bash
+python scripts/audit_snapshots.py --root data/raw
+```
+
+Expected: a deterministic inventory with the pair count, matchday summary, duplicate
+hash groups, and any `missing-file` or `corrupt` entries. Exit status `0` means the
+local inventory is internally consistent; `1` means evidence needs review. An
+unreferenced local directory is not automatically an error and must not be deleted.
+No database, cloud, or network connection is made by this command.
+
+To save a report, use a path outside `data/raw`; the command rejects raw-directory
+report paths:
+
+```bash
+python scripts/audit_snapshots.py --root data/raw \
+  --json-output data/reports/snapshot-audit.json
+```
+
+After the local report is reviewed, the owner may explicitly perform the read-only
+SQL Server reconciliation:
+
+```bash
+python scripts/audit_snapshots.py --root data/raw --sqlserver
+```
+
+This compares `dbo.source_snapshots` references, paths, hashes, and byte counts with
+local files. It distinguishes database-referenced-but-missing evidence,
+corrupt-referenced evidence, path/hash mismatches, and local directories with no
+database reference. Do not infer which three records are extras from `17` local pairs
+versus `14` database rows without this reconciliation; repeated retrievals and failed
+or uncommitted provenance can explain the difference.
+
+Stop before object migration if the audit reports corruption, a missing referenced
+directory, a path mismatch, or a hash/size mismatch. The command never writes
+`data/raw` and does not modify SQL Server.
+
+Before a cloud migration, review the selected private S3-compatible endpoint and set
+these values only in local secret storage or the deployment secret store; never place
+actual values in this repository:
+
+```text
+OBJECT_STORAGE_ENDPOINT_URL=https://<private-object-endpoint>
+OBJECT_STORAGE_BUCKET=<private-bucket>
+OBJECT_STORAGE_REGION=<provider-region>
+OBJECT_STORAGE_ACCESS_KEY_ID=<sync-or-migration-key>
+OBJECT_STORAGE_SECRET_ACCESS_KEY=<secret>
+OBJECT_STORAGE_PREFIX=sports-fixtures/raw
+```
+
+Review the migration without writes first:
+
+```bash
+python scripts/migrate_snapshots_to_object_storage.py
+```
+
+Expected: `Snapshot migration previewed; verified N snapshots.` The preview must stop
+for missing local files, malformed metadata, response/metadata path mismatch,
+database hash/size mismatch, unexpected PostgreSQL snapshot rows, or target locator
+mismatch. It does not upload objects or update PostgreSQL. Only after the owner has
+reviewed the audit, PostgreSQL parity, target isolation, private bucket policy, and
+backup/recovery plan may the owner run:
+
+```bash
+python scripts/migrate_snapshots_to_object_storage.py --apply
+```
+
+The apply path verifies response and metadata bytes before upload, uses retrieval-time
+and hash-qualified immutable keys, verifies both objects after upload, and updates
+PostgreSQL locators in a transaction. Existing identical objects are safe to replay;
+conflicting bytes and partial pairs are rejected. A PostgreSQL rollback cannot undo an
+object upload. If an apply failure reports possible orphan keys, do not delete them
+automatically: compare each key's response/metadata hash with `source_snapshots` and
+failed import provenance, then review the provider's object list using its confirmed
+private client. Cleanup of an unknown or pre-existing object requires an explicit
+owner decision.
+
+After apply, verify the database locators and object bytes using the provider's
+read-only object inspection and the existing PostgreSQL parity workflow. Later cloud
+replay remains a separate gate: use `scripts/evaluate_snapshot.py --object-key` only
+after the object pair and hash have been independently reviewed. Render and GitHub
+ephemeral disks are staging locations, not the archive. Scheduled synchronization
+remains disabled until the storage, role, migration, replay, and recovery gates pass.
 
 ## 14. Final Git review, commit, and push
 
