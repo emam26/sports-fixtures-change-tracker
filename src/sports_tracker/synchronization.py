@@ -417,6 +417,14 @@ def preserve_sync_response(
 
 
 class SyncCoordinator:
+    def _renew_lease_if_supported(self) -> None:
+        """Keep a database-backed lease alive at synchronization boundaries."""
+
+        lease = getattr(self, "_lease", None)
+        renew = getattr(lease, "renew", None)
+        if renew is not None:
+            renew()
+
     """Coordinate cheap change checks, immutable capture, and transactional import."""
 
     def __init__(

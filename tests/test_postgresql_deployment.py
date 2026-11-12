@@ -7,7 +7,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from scripts.migrate_sqlserver_to_postgres import stable_row_hash
+from scripts.migrate_sqlserver_to_postgres import (
+    MigrationMismatchError,
+    _fetch_target_row,
+    _fetch_target_rows,
+    _validated_schema,
+    stable_row_hash,
+)
 
 from sports_tracker.api.postgres_repository import PostgreSQLRepository
 from sports_tracker.config import ConfigurationError, load_postgresql_settings
@@ -141,6 +147,53 @@ class _ReturningCursor:
 
     def fetchone(self) -> tuple[int]:
         return (41,)
+
+
+class _MappingCursor:
+    def execute(self, statement: str, parameters: tuple[object, ...] = ()) -> None:
+        del statement, parameters
+
+    def fetchone(self) -> dict[str, object]:
+        return {"provider": "OpenLigaDB", "competition_id": 41}
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return [{"provider": "OpenLigaDB", "competition_id": 41}]
+
+
+def test_migration_normalizes_dict_rows_from_psycopg() -> None:
+    cursor = _MappingCursor()
+    connection = _Connection(cursor)  # type: ignore[arg-type]
+
+    row = _fetch_target_row(
+        connection,
+        "competitions",
+        "competition_id",
+        ("competition_id", "provider"),
+        41,
+        "public",
+    )
+
+    assert row == (41, "OpenLigaDB")
+
+    rows = _fetch_target_rows(
+        connection,
+        "competitions",
+        "competition_id",
+        ("competition_id", "provider"),
+        "public",
+    )
+
+    assert rows == [(41, "OpenLigaDB")]
+
+
+def test_migration_rejects_unsafe_schema_identifier() -> None:
+    with pytest.raises(MigrationMismatchError, match="simple SQL identifier"):
+        _validated_schema('public".unsafe')
+
+
+def test_postgresql_repository_rejects_unsafe_schema_identifier() -> None:
+    with pytest.raises(ValueError, match="simple SQL identifier"):
+        PostgreSQLRepository(lambda: _Connection(_Cursor()), schema='public".unsafe')
 
 
 def test_postgresql_import_store_uses_fixture_fields_and_returning_id() -> None:

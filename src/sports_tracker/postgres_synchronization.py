@@ -149,8 +149,74 @@ class PostgreSQLSyncLease:
                 "a PostgreSQL synchronization lease is already held"
             ) from exc
         self._connection = connection
+        self._start_heartbeat()
+
+    def _start_heartbeat(self) -> None:
+        import threading
+
+        stop_event = threading.Event()
+        self._heartbeat_stop = stop_event
+
+        def keep_alive() -> None:
+            interval = max(1.0, min(self._lease_seconds / 3, 60.0))
+            while not stop_event.wait(interval):
+                try:
+                    self.renew()
+                except Exception:
+                    self._heartbeat_error = True
+                    stop_event.set()
+                    return
+
+        heartbeat = threading.Thread(
+            target=keep_alive,
+            name="sports-tracker-sync-lease",
+            daemon=True,
+        )
+        self._heartbeat_thread = heartbeat
+        heartbeat.start()
+
+    def renew(self) -> None:
+        """Extend the lease only while this owner still holds it."""
+
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError("cannot renew a PostgreSQL sync lease that is not held")
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE sync_leases
+                    SET expires_at_utc = CURRENT_TIMESTAMP
+                        + (%s * INTERVAL '1 second')
+                    WHERE lease_key = %s
+                      AND owner_token = %s
+                      AND expires_at_utc > CURRENT_TIMESTAMP
+                    """,
+                    (self._lease_seconds, self._lease_key, self._owner_token),
+                )
+                if cursor.rowcount != 1:
+                    connection.rollback()
+                    self.release()
+                    raise SyncAlreadyRunningError(
+                        "the PostgreSQL synchronization lease was lost before renewal"
+                    )
+            connection.commit()
+        except SyncAlreadyRunningError:
+            raise
+        except Exception:
+            connection.rollback()
+            raise
 
     def release(self) -> None:
+        import threading
+
+        stop_event = getattr(self, "_heartbeat_stop", None)
+        if stop_event is not None:
+            stop_event.set()
+        heartbeat = getattr(self, "_heartbeat_thread", None)
+        if heartbeat is not None and heartbeat is not threading.current_thread():
+            heartbeat.join(timeout=2)
         if self._connection is None:
             return
         try:
