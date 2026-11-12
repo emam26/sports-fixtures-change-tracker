@@ -34,6 +34,7 @@ class _FakeS3:
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
         self.fail_metadata_upload = False
+        self.fail_delete = False
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, _Body]:
         del Bucket
@@ -51,6 +52,8 @@ class _FakeS3:
 
     def delete_object(self, *, Bucket: str, Key: str) -> None:
         del Bucket
+        if self.fail_delete:
+            raise RuntimeError("synthetic cleanup failure")
         self.objects.pop(Key, None)
 
 
@@ -149,6 +152,44 @@ def test_object_store_cleans_new_response_after_metadata_upload_failure() -> Non
     client.fail_metadata_upload = False
     store.put("snapshot", b"body", _metadata(b"body"))
     assert client.objects["snapshot/response.json"] == b"body"
+
+
+def test_object_store_repairs_a_matching_partial_pair_without_overwriting_response() -> None:
+    client = _FakeS3()
+    body = b"body"
+    client.objects["snapshot/response.json"] = body
+    store = NeonS3SnapshotStore(_settings(), client=client)
+
+    store.put("snapshot", body, _metadata(body))
+
+    assert client.objects["snapshot/response.json"] == body
+    assert client.objects["snapshot/metadata.json"]
+
+
+def test_object_store_reports_orphan_when_cleanup_cannot_complete() -> None:
+    client = _FakeS3()
+    client.fail_metadata_upload = True
+    client.fail_delete = True
+    store = NeonS3SnapshotStore(_settings(), client=client)
+
+    with pytest.raises(SnapshotStorageError, match="possible orphan objects"):
+        store.put("snapshot", b"body", _metadata(b"body"))
+
+    assert client.objects["snapshot/response.json"] == b"body"
+
+
+def test_object_store_rejects_conflicting_partial_pair_without_deleting_existing_object() -> None:
+    client = _FakeS3()
+    body = b"body"
+    client.objects["snapshot/response.json"] = body
+    client.objects["snapshot/metadata.json"] = b"conflicting"
+    store = NeonS3SnapshotStore(_settings(), client=client)
+
+    with pytest.raises(SnapshotStorageError, match="immutable object content mismatch"):
+        store.put("snapshot", body, _metadata(body))
+
+    assert client.objects["snapshot/response.json"] == body
+    assert client.objects["snapshot/metadata.json"] == b"conflicting"
 
 
 def test_object_storage_loader_requires_all_credentials_and_redacts_them() -> None:
