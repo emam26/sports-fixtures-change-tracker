@@ -54,21 +54,48 @@ def _utc_text(value: Any) -> str:
     return str(value)
 
 
+def _validate_local_paths(
+    local_directory: Path,
+    response_path: Path,
+    metadata_path: Path,
+) -> None:
+    for path, label in (
+        (local_directory, "local_directory"),
+        (response_path, "response_path"),
+        (metadata_path, "metadata_path"),
+    ):
+        if ".." in path.parts:
+            raise SnapshotMigrationError(f"snapshot {label} contains an unsafe parent path")
+    expected_response = (local_directory / "response.json").resolve(strict=False)
+    expected_metadata = (local_directory / "metadata.json").resolve(strict=False)
+    if response_path.resolve(strict=False) != expected_response:
+        raise SnapshotMigrationError("snapshot response path does not match local_directory")
+    if metadata_path.resolve(strict=False) != expected_metadata:
+        raise SnapshotMigrationError("snapshot metadata path does not match local_directory")
+
+
 def _read_transfer(row: Any, object_settings: Any) -> SnapshotTransfer:
-    snapshot_id = int(row[0])
-    provider = str(row[1])
-    shortcut = str(row[2])
-    season = int(row[4])
-    matchday = int(row[5])
-    source_url = str(row[6])
-    retrieved_at = _utc_text(row[7])
-    http_status = int(row[8])
-    content_type = row[9]
-    byte_count = int(row[10])
-    expected_sha = str(row[11]).lower()
-    old_local_directory = str(row[12])
-    response_path = Path(str(row[13]))
-    metadata_path = Path(str(row[14]))
+    try:
+        snapshot_id = int(row[0])
+        provider = str(row[1])
+        shortcut = str(row[2])
+        season = int(row[4])
+        matchday = int(row[5])
+        source_url = str(row[6])
+        retrieved_at = _utc_text(row[7])
+        http_status = int(row[8])
+        content_type = row[9]
+        byte_count = int(row[10])
+        expected_sha = str(row[11]).lower()
+        old_local_directory = str(row[12])
+        local_directory = Path(old_local_directory)
+        response_path = Path(str(row[13]))
+        metadata_path = Path(str(row[14]))
+    except (IndexError, TypeError, ValueError) as exc:
+        raise SnapshotMigrationError("source snapshot row has invalid metadata") from exc
+    _validate_local_paths(local_directory, response_path, metadata_path)
+    if not old_local_directory.strip():
+        raise SnapshotMigrationError(f"snapshot {snapshot_id} local_directory is blank")
     try:
         body = response_path.read_bytes()
         metadata_bytes = metadata_path.read_bytes()
@@ -147,30 +174,55 @@ def _verify_target_references(
     transfers: list[SnapshotTransfer],
     schema: str,
 ) -> None:
-    for transfer in transfers:
-        cursor = connection.cursor()
-        cursor.execute(
-            f"SELECT sha256, local_directory, response_path, metadata_path "
-            f'FROM "{schema}"."source_snapshots" '
-            "WHERE source_snapshot_id = %s",
-            (transfer.source_snapshot_id,),
+    cursor = connection.cursor()
+    cursor.execute(
+        f"SELECT source_snapshot_id, sha256, byte_count, local_directory, "
+        f'response_path, metadata_path FROM "{schema}"."source_snapshots" '
+        "ORDER BY source_snapshot_id"
+    )
+    target_rows = cursor.fetchall()
+    target_by_id = {int(_row_value(row, "source_snapshot_id", 0)): row for row in target_rows}
+    expected_ids = {transfer.source_snapshot_id for transfer in transfers}
+    unexpected_ids = sorted(set(target_by_id) - expected_ids)
+    if unexpected_ids:
+        raise SnapshotMigrationError(
+            "PostgreSQL contains unexpected source snapshots: "
+            + ", ".join(str(identifier) for identifier in unexpected_ids)
         )
-        row = cursor.fetchone()
+
+    for transfer in transfers:
+        row = target_by_id.get(transfer.source_snapshot_id)
         if row is None:
             raise SnapshotMigrationError(
                 f"PostgreSQL is missing source snapshot {transfer.source_snapshot_id}"
             )
-        if str(_row_value(row, "sha256", 0)).lower() != transfer.sha256:
+        if str(_row_value(row, "sha256", 1)).lower() != transfer.sha256:
             raise SnapshotMigrationError(
                 f"PostgreSQL source snapshot {transfer.source_snapshot_id} has a hash mismatch"
             )
-        if str(_row_value(row, "local_directory", 1)) not in {
+        if int(_row_value(row, "byte_count", 2)) != len(transfer.body):
+            raise SnapshotMigrationError(
+                f"PostgreSQL source snapshot {transfer.source_snapshot_id} has a "
+                "byte-count mismatch"
+            )
+        target_local_directory = str(_row_value(row, "local_directory", 3))
+        if target_local_directory not in {
             transfer.old_local_directory,
             transfer.object_key,
         }:
             raise SnapshotMigrationError(
                 f"PostgreSQL source snapshot {transfer.source_snapshot_id} has an "
                 "unexpected locator"
+            )
+        expected_target_directory = target_local_directory
+        if str(_row_value(row, "response_path", 4)) != (
+            f"{expected_target_directory}/response.json"
+        ) or str(_row_value(row, "metadata_path", 5)) != (
+            f"{expected_target_directory}/metadata.json"
+        ):
+            raise SnapshotMigrationError(
+                f"PostgreSQL source snapshot {transfer.source_snapshot_id} has an "
+                "inconsistent response or metadata locator"
             )
 
 
@@ -179,6 +231,7 @@ def migrate_snapshots(*, apply: bool, schema: str = "public") -> int:
     object_settings = load_object_storage_settings()
     transfers = _load_transfers(object_settings)
     with postgresql_connection(load_postgresql_settings()) as target:
+        uploaded_keys: list[str] = []
         try:
             _verify_target_references(target, transfers, schema)
             if not apply:
@@ -192,6 +245,7 @@ def migrate_snapshots(*, apply: bool, schema: str = "public") -> int:
                     transfer.metadata_bytes,
                     expected_sha256=transfer.sha256,
                 )
+                uploaded_keys.append(transfer.object_key)
             cursor = target.cursor()
             for transfer in transfers:
                 cursor.execute(
@@ -211,8 +265,13 @@ def migrate_snapshots(*, apply: bool, schema: str = "public") -> int:
                         f"could not update PostgreSQL source snapshot {transfer.source_snapshot_id}"
                     )
             target.commit()
-        except Exception:
+        except Exception as exc:
             target.rollback()
+            if uploaded_keys:
+                raise SnapshotMigrationError(
+                    "database transaction rolled back after object upload failure; "
+                    "review these possible orphan keys before retrying: " + ", ".join(uploaded_keys)
+                ) from exc
             raise
     return len(transfers)
 
