@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from sports_tracker.config import OpenLigaDBSettings
+from sports_tracker.config import OpenLigaDBSettings, load_object_storage_settings
 from sports_tracker.ingestion import (
     SnapshotImportProcessor,
     SQLServerImportStore,
@@ -27,6 +28,10 @@ from sports_tracker.openligadb import (
 )
 from sports_tracker.runtime import ConnectionFactory
 from sports_tracker.snapshots import save_raw_snapshot
+from sports_tracker.storage import (
+    NeonS3SnapshotStore,
+    build_snapshot_object_key,
+)
 
 
 class SyncError(RuntimeError):
@@ -383,6 +388,30 @@ def preserve_sync_response(
 ) -> tuple[Path, str]:
     """Preserve a response through the single Stage 1 immutable snapshot writer."""
 
+    if settings.raw_snapshot_storage == "object":
+        object_settings = load_object_storage_settings()
+        digest = hashlib.sha256(response.body).hexdigest()
+        metadata = {
+            "provider": "OpenLigaDB",
+            "url": response.url,
+            "shortcut": settings.shortcut,
+            "season": settings.season,
+            "matchday": matchday,
+            "retrieved_at_utc": response.retrieved_at_utc,
+            "http_status": response.status_code,
+            "content_type": response.content_type,
+            "byte_count": len(response.body),
+            "sha256": digest,
+        }
+        key = build_snapshot_object_key(
+            object_settings,
+            shortcut=settings.shortcut,
+            season=settings.season,
+            matchday=matchday,
+            retrieved_at_utc=response.retrieved_at_utc,
+            sha256=digest,
+        )
+        NeonS3SnapshotStore(object_settings).put(key, response.body, metadata)
     snapshot = save_raw_snapshot(response, settings, matchday)
     return snapshot.directory, snapshot.sha256
 
@@ -396,12 +425,17 @@ class SyncCoordinator:
         client: OpenLigaDBClient,
         connection_factory: ConnectionFactory,
         logger: Logger,
+        checkpoint_reader_factory=None,
+        store_factory=None,
+        snapshot_capture=None,
     ) -> None:
         self._client = client
         self._connection_factory = connection_factory
         self._settings = client.settings
         self._logger = logger
-        self._checkpoints = SQLCheckpointReader(connection_factory)
+        self._checkpoints = (checkpoint_reader_factory or SQLCheckpointReader)(connection_factory)
+        self._store_factory = store_factory or SQLServerImportStore
+        self._snapshot_capture = snapshot_capture or preserve_sync_response
 
     def _should_fetch(self, signal: LastChangeSignal, checkpoint: datetime | None) -> bool:
         if not signal.reliable or signal.changed_at_utc is None:
@@ -458,19 +492,31 @@ class SyncCoordinator:
             signal_reason=signal.reason,
         )
         response = self._client.fetch_matchday(matchday)
-        directory, digest = preserve_sync_response(
+        directory, digest = self._snapshot_capture(
             response,
             settings=self._settings,
             matchday=matchday,
         )
         parsed = load_snapshot(directory, self._settings)
+        if self._settings.raw_snapshot_storage == "object":
+            object_settings = load_object_storage_settings()
+            digest = hashlib.sha256(response.body).hexdigest()
+            object_key = build_snapshot_object_key(
+                object_settings,
+                shortcut=self._settings.shortcut,
+                season=self._settings.season,
+                matchday=matchday,
+                retrieved_at_utc=response.retrieved_at_utc,
+                sha256=digest,
+            )
+            parsed = replace(parsed, directory=Path(object_key))
         parsed = replace(
             parsed,
             source_last_change_utc=(signal.changed_at_utc if signal.reliable else None),
         )
         try:
             with closing(self._connection_factory()) as connection:
-                store = SQLServerImportStore(connection)
+                store = self._store_factory(connection)
                 processor = SnapshotImportProcessor(store)
                 result = processor.import_snapshot(parsed)
         except Exception as exc:

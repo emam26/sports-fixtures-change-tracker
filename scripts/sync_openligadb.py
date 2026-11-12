@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 
 from sports_tracker.config import (
     ConfigurationError,
+    load_database_backend,
+    load_object_storage_settings,
     load_openligadb_settings,
     load_sync_settings,
 )
@@ -16,7 +18,13 @@ from sports_tracker.openligadb import (
     RetryPolicy,
     SeasonDiscovery,
 )
-from sports_tracker.runtime import open_sql_server_connection
+from sports_tracker.postgres_ingestion import PostgreSQLImportStore
+from sports_tracker.postgres_synchronization import (
+    PostgreSQLCheckpointReader,
+    PostgreSQLMatchdayReader,
+    PostgreSQLSyncLease,
+)
+from sports_tracker.runtime import open_postgresql_connection, open_sql_server_connection
 from sports_tracker.synchronization import (
     MatchdaySelection,
     MatchdaySyncState,
@@ -66,6 +74,7 @@ def _select_matchdays(
     sync,
     client: OpenLigaDBClient,
     connection_factory,
+    matchday_reader_factory=None,
 ) -> tuple[tuple[int, ...], SeasonDiscovery | None, tuple[MatchdaySelection, ...]]:
     requested = tuple(args.matchday or ())
     if requested:
@@ -91,7 +100,7 @@ def _select_matchdays(
             ),
         )
 
-    reader = SyncMatchdayReader(connection_factory)
+    reader = (matchday_reader_factory or SyncMatchdayReader)(connection_factory)
     states = list(
         reader.states(
             provider="OpenLigaDB",
@@ -156,6 +165,21 @@ def main() -> int:
     try:
         source = load_openligadb_settings()
         sync = load_sync_settings()
+        if source.raw_snapshot_storage == "object":
+            load_object_storage_settings()
+        backend = load_database_backend()
+        if backend == "postgresql":
+            connection_factory = open_postgresql_connection
+            matchday_reader = PostgreSQLMatchdayReader
+            checkpoint_reader = PostgreSQLCheckpointReader
+            store_factory = PostgreSQLImportStore
+            sync_lock = PostgreSQLSyncLease(connection_factory)
+        else:
+            connection_factory = open_sql_server_connection
+            matchday_reader = SyncMatchdayReader
+            checkpoint_reader = None
+            store_factory = None
+            sync_lock = RunLock(sync.lock_file)
         logger = SafeJsonLogger(sync.log_directory)
         client = OpenLigaDBClient(
             source,
@@ -165,13 +189,14 @@ def main() -> int:
                 max_backoff_seconds=sync.backoff_max_seconds,
             ),
         )
-        with RunLock(sync.lock_file):
+        with sync_lock:
             matchdays, discovery, selections = _select_matchdays(
                 args,
                 source=source,
                 sync=sync,
                 client=client,
-                connection_factory=open_sql_server_connection,
+                connection_factory=connection_factory,
+                matchday_reader_factory=matchday_reader,
             )
             if discovery is not None:
                 logger.write(
@@ -191,8 +216,10 @@ def main() -> int:
             )
             coordinator = SyncCoordinator(
                 client=client,
-                connection_factory=open_sql_server_connection,
+                connection_factory=connection_factory,
                 logger=logger,
+                checkpoint_reader_factory=checkpoint_reader,
+                store_factory=store_factory,
             )
             logger.write("sync_run_started", matchdays=matchdays)
             outcomes = coordinator.synchronize(matchdays)

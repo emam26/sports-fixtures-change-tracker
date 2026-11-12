@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
-import pyodbc
+try:
+    import pyodbc
+except ModuleNotFoundError:  # pragma: no cover - SQL Server extra is optional in cloud
+    pyodbc = None  # type: ignore[assignment]
 
 from sports_tracker.config import (
     ConfigurationError,
+    load_database_backend,
     load_database_settings,
+    load_object_storage_settings,
     load_openligadb_settings,
+    load_postgresql_settings,
 )
 from sports_tracker.database import database_connection
 from sports_tracker.ingestion import (
@@ -22,6 +29,15 @@ from sports_tracker.ingestion import (
     ValidationIssue,
     load_snapshot,
 )
+from sports_tracker.postgres import postgresql_connection
+from sports_tracker.postgres_ingestion import PostgreSQLImportStore
+from sports_tracker.storage import (
+    NeonS3SnapshotStore,
+    SnapshotStorageError,
+    build_snapshot_object_key,
+)
+
+_DATABASE_ERRORS = (OSError, RuntimeError) + ((pyodbc.Error,) if pyodbc is not None else ())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,6 +75,29 @@ def _print_issues(issues: tuple[ValidationIssue, ...]) -> None:
         )
 
 
+def _prepare_postgresql_snapshot(parsed, source_settings):
+    if source_settings.raw_snapshot_storage != "object":
+        return parsed
+    object_settings = load_object_storage_settings()
+    body = (parsed.directory / "response.json").read_bytes()
+    metadata_bytes = (parsed.directory / "metadata.json").read_bytes()
+    key = build_snapshot_object_key(
+        object_settings,
+        shortcut=parsed.metadata.shortcut,
+        season=parsed.metadata.season,
+        matchday=parsed.metadata.matchday,
+        retrieved_at_utc=parsed.metadata.retrieved_at_utc,
+        sha256=parsed.metadata.sha256,
+    )
+    NeonS3SnapshotStore(object_settings).put_files(
+        key,
+        body,
+        metadata_bytes,
+        expected_sha256=parsed.metadata.sha256,
+    )
+    return replace(parsed, directory=Path(key))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -92,14 +131,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        database_settings = load_database_settings()
-        with database_connection(database_settings) as connection:
-            summary = SnapshotImportProcessor(
-                SQLServerImportStore(connection, parsed.metadata.provider)
-            ).import_snapshot(parsed)
+        if load_database_backend() == "postgresql":
+            database_settings = load_postgresql_settings()
+            parsed = _prepare_postgresql_snapshot(parsed, source_settings)
+            with postgresql_connection(database_settings) as connection:
+                store = PostgreSQLImportStore(connection, parsed.metadata.provider)
+                summary = SnapshotImportProcessor(store).import_snapshot(parsed)
+        else:
+            database_settings = load_database_settings()
+            with database_connection(database_settings) as connection:
+                store = SQLServerImportStore(connection, parsed.metadata.provider)
+                summary = SnapshotImportProcessor(store).import_snapshot(parsed)
     except ConfigurationError as exc:
         print(f"Snapshot import failed: {exc}", file=sys.stderr)
         return 2
+    except SnapshotStorageError as exc:
+        print(f"Snapshot import failed: durable snapshot storage: {exc}", file=sys.stderr)
+        return 3
     except ImportExecutionError as exc:
         print(
             f"Snapshot import failed: {exc}. "
@@ -107,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 3
-    except (OSError, pyodbc.Error):
+    except _DATABASE_ERRORS:
         print(
             "Snapshot import failed: could not access the configured database.",
             file=sys.stderr,
