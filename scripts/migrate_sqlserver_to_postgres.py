@@ -397,8 +397,7 @@ def reconcile_and_migrate(*, apply: bool, schema: str = "public") -> dict[str, d
                     }
                 if apply:
                     sequence_cursor = target.cursor()
-                    for table, columns in TABLE_SPECS:
-                        primary_key = columns[0]
+                    for table, primary_key, _columns in TABLE_SPECS:
                         sequence_cursor.execute(
                             "SELECT setval(pg_get_serial_sequence(%s, %s), "
                             f'COALESCE((SELECT MAX("{primary_key}") '
