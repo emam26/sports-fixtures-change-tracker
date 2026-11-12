@@ -1,4 +1,4 @@
-"""Environment-backed SQL Server configuration."""
+"""Environment-backed database, source, synchronization, and API configuration."""
 
 from __future__ import annotations
 
@@ -19,6 +19,31 @@ class ConfigurationError(ValueError):
 
 
 ApplicationDeploymentMode = Literal["local", "public_readonly"]
+DatabaseBackend = Literal["sqlserver", "postgresql"]
+SnapshotStorageMode = Literal["local", "object"]
+
+
+@dataclass(frozen=True, repr=False)
+class ObjectStorageSettings:
+    """Validated private S3-compatible object-storage settings."""
+
+    endpoint_url: str
+    bucket: str
+    region: str
+    access_key_id: str
+    secret_access_key: str
+    prefix: str = "sports-fixtures/raw"
+    connect_timeout_seconds: float = 10.0
+    read_timeout_seconds: float = 30.0
+
+    def __repr__(self) -> str:
+        return (
+            "ObjectStorageSettings(endpoint_url=<redacted>, "
+            f"bucket={self.bucket!r}, region={self.region!r}, "
+            "access_key_id='<redacted>', secret_access_key='<redacted>', "
+            f"prefix={self.prefix!r}, connect_timeout_seconds={self.connect_timeout_seconds!r}, "
+            f"read_timeout_seconds={self.read_timeout_seconds!r})"
+        )
 
 
 @dataclass(frozen=True, repr=False)
@@ -54,6 +79,34 @@ class DatabaseSettings:
         return build_connection_string(self)
 
 
+@dataclass(frozen=True, repr=False)
+class PostgreSQLSettings:
+    """Validated PostgreSQL connection settings for local or cloud runtime use."""
+
+    database_url: str
+    sslmode: str
+    channel_binding: str
+    connect_timeout_seconds: float
+    statement_timeout_ms: int
+    pool_min_size: int
+    pool_max_size: int
+    schema: str = "public"
+
+    def __repr__(self) -> str:
+        """Return a diagnostic representation that never includes the DSN."""
+
+        return (
+            "PostgreSQLSettings(database_url='<redacted>', "
+            f"sslmode={self.sslmode!r}, "
+            f"channel_binding={self.channel_binding!r}, "
+            f"connect_timeout_seconds={self.connect_timeout_seconds!r}, "
+            f"statement_timeout_ms={self.statement_timeout_ms!r}, "
+            f"pool_min_size={self.pool_min_size!r}, "
+            f"pool_max_size={self.pool_max_size!r}, "
+            f"schema={self.schema!r})"
+        )
+
+
 @dataclass(frozen=True)
 class OpenLigaDBSettings:
     """Validated settings for retrieving OpenLigaDB matchday data."""
@@ -67,6 +120,7 @@ class OpenLigaDBSettings:
     user_agent: str = "sports-fixtures-change-tracker/0.1 (OpenLigaDB client)"
     expected_league_phase_matchdays: tuple[int, ...] = tuple(range(1, 9))
     expected_fixtures_per_matchday: int = 18
+    raw_snapshot_storage: SnapshotStorageMode = "local"
 
 
 @dataclass(frozen=True)
@@ -195,6 +249,147 @@ def load_database_settings(
         password=password,
         encrypt=_yes_or_no(values, "SQL_SERVER_ENCRYPT"),
         trust_server_certificate=_yes_or_no(values, "SQL_SERVER_TRUST_CERTIFICATE"),
+    )
+
+
+def load_database_backend(
+    dotenv_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> DatabaseBackend:
+    """Load the explicitly selected persistence backend."""
+
+    values = _merged_values(dotenv_path, environ)
+    backend = str(values.get("DATABASE_BACKEND", "sqlserver")).strip().lower()
+    if backend not in {"sqlserver", "postgresql"}:
+        raise ConfigurationError("DATABASE_BACKEND must be sqlserver or postgresql")
+    return backend  # type: ignore[return-value]
+
+
+def _validated_postgresql_url(value: str) -> str:
+    database_url = value.strip()
+    parsed = urlsplit(database_url)
+    if (
+        parsed.scheme not in {"postgres", "postgresql"}
+        or not parsed.netloc
+        or not parsed.path.strip("/")
+        or parsed.fragment
+    ):
+        raise ConfigurationError(
+            "POSTGRES_DATABASE_URL must be a PostgreSQL URL with a database name"
+        )
+    return database_url
+
+
+def load_postgresql_settings(
+    dotenv_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> PostgreSQLSettings:
+    """Load PostgreSQL settings without exposing the credential-bearing DSN."""
+
+    values = _merged_values(dotenv_path, environ)
+    raw_url = values.get("POSTGRES_DATABASE_URL") or values.get("DATABASE_URL")
+    if raw_url is None or not str(raw_url).strip():
+        raise ConfigurationError(
+            "Missing required PostgreSQL setting: POSTGRES_DATABASE_URL or DATABASE_URL"
+        )
+    database_url = _validated_postgresql_url(str(raw_url))
+
+    sslmode = str(values.get("POSTGRES_SSLMODE", "verify-full")).strip().lower()
+    if sslmode not in {"verify-full", "verify-ca", "require"}:
+        raise ConfigurationError("POSTGRES_SSLMODE must be verify-full, verify-ca, or require")
+    deployment_mode = str(values.get("API_DEPLOYMENT_MODE", "local")).strip().lower()
+    if deployment_mode == "public_readonly" and sslmode != "verify-full":
+        raise ConfigurationError(
+            "public_readonly PostgreSQL deployments require POSTGRES_SSLMODE=verify-full"
+        )
+    channel_binding = str(values.get("POSTGRES_CHANNEL_BINDING", "require")).strip().lower()
+    if channel_binding not in {"require", "prefer", "disable"}:
+        raise ConfigurationError("POSTGRES_CHANNEL_BINDING must be require, prefer, or disable")
+    schema = str(values.get("POSTGRES_SCHEMA", "public")).strip()
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema) is None:
+        raise ConfigurationError("POSTGRES_SCHEMA must be a simple SQL identifier")
+    pool_min_size = _optional_nonnegative_int(
+        values,
+        "POSTGRES_POOL_MIN_SIZE",
+        default=0,
+    )
+    pool_max_size = _optional_positive_int(
+        values,
+        "POSTGRES_POOL_MAX_SIZE",
+        default=2,
+    )
+    if pool_max_size < pool_min_size:
+        raise ConfigurationError("POSTGRES_POOL_MAX_SIZE must be at least the minimum pool size")
+    return PostgreSQLSettings(
+        database_url=database_url,
+        sslmode=sslmode,
+        channel_binding=channel_binding,
+        connect_timeout_seconds=_optional_positive_float(
+            values,
+            "POSTGRES_CONNECT_TIMEOUT_SECONDS",
+            default=10.0,
+        ),
+        statement_timeout_ms=_optional_positive_int(
+            values,
+            "POSTGRES_STATEMENT_TIMEOUT_MS",
+            default=30_000,
+        ),
+        pool_min_size=pool_min_size,
+        pool_max_size=pool_max_size,
+        schema=schema,
+    )
+
+
+def load_object_storage_settings(
+    dotenv_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> ObjectStorageSettings:
+    """Load private S3-compatible storage settings without exposing credentials."""
+
+    values = _merged_values(dotenv_path, environ)
+    endpoint = _required_value(values, "OBJECT_STORAGE_ENDPOINT_URL").strip().rstrip("/")
+    parsed_endpoint = urlsplit(endpoint)
+    if (
+        parsed_endpoint.scheme not in {"http", "https"}
+        or not parsed_endpoint.netloc
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
+        raise ConfigurationError(
+            "OBJECT_STORAGE_ENDPOINT_URL must be an HTTP(S) URL without credentials "
+            "or query parameters"
+        )
+    if parsed_endpoint.scheme != "https":
+        raise ConfigurationError("OBJECT_STORAGE_ENDPOINT_URL must use HTTPS")
+
+    bucket = _required_value(values, "OBJECT_STORAGE_BUCKET").strip()
+    if "/" in bucket or "\\" in bucket or bucket == "." or bucket == "..":
+        raise ConfigurationError("OBJECT_STORAGE_BUCKET must be a single bucket name")
+    region = _required_value(values, "OBJECT_STORAGE_REGION").strip()
+    access_key_id = _required_value(values, "OBJECT_STORAGE_ACCESS_KEY_ID").strip()
+    secret_access_key = _required_value(values, "OBJECT_STORAGE_SECRET_ACCESS_KEY")
+    prefix = str(values.get("OBJECT_STORAGE_PREFIX", "sports-fixtures/raw")).strip().strip("/")
+    if not prefix or ".." in prefix or "\\" in prefix:
+        raise ConfigurationError("OBJECT_STORAGE_PREFIX must be a safe object-key prefix")
+    return ObjectStorageSettings(
+        endpoint_url=endpoint,
+        bucket=bucket,
+        region=region,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        prefix=prefix,
+        connect_timeout_seconds=_optional_positive_float(
+            values,
+            "OBJECT_STORAGE_CONNECT_TIMEOUT_SECONDS",
+            default=10.0,
+        ),
+        read_timeout_seconds=_optional_positive_float(
+            values,
+            "OBJECT_STORAGE_READ_TIMEOUT_SECONDS",
+            default=30.0,
+        ),
     )
 
 
@@ -361,6 +556,9 @@ def load_openligadb_settings(
         "OPENLIGADB_EXPECTED_FIXTURES_PER_MATCHDAY",
         default=18,
     )
+    raw_snapshot_storage = str(values.get("RAW_SNAPSHOT_STORAGE", "local")).strip().lower()
+    if raw_snapshot_storage not in {"local", "object"}:
+        raise ConfigurationError("RAW_SNAPSHOT_STORAGE must be local or object")
     return OpenLigaDBSettings(
         base_url=base_url,
         shortcut=shortcut,
@@ -370,6 +568,7 @@ def load_openligadb_settings(
         raw_snapshot_directory=Path(raw_directory),
         expected_league_phase_matchdays=expected_league_phase_matchdays,
         expected_fixtures_per_matchday=expected_fixtures_per_matchday,
+        raw_snapshot_storage=raw_snapshot_storage,  # type: ignore[arg-type]
     )
 
 
