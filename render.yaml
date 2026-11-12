@@ -1,0 +1,66 @@
+services:
+  - type: web
+    name: sports-fixtures-change-tracker
+    runtime: python
+    plan: free
+    buildCommand: pip install '.[cloud]'
+    startCommand: uvicorn sports_tracker.api.app:create_app --factory --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DATABASE_BACKEND
+        value: postgresql
+      - key: API_DEPLOYMENT_MODE
+        value: public_readonly
+      - key: API_LOCAL_ONLY
+        value: "no"
+      - key: API_ALLOW_NOTE_WRITES
+        value: "no"
+      - key: API_NOTES_WRITE_TOKEN
+        value: ""
+      - key: POSTGRES_DATABASE_URL
+        sync: false
+      - key: POSTGRES_SSLMODE
+        value: verify-full
+      - key: POSTGRES_CHANNEL_BINDING
+        value: require
+      - key: POSTGRES_CONNECT_TIMEOUT_SECONDS
+        value: "10"
+      - key: POSTGRES_STATEMENT_TIMEOUT_MS
+        value: "30000"
+      - key: POSTGRES_POOL_MIN_SIZE
+        value: "0"
+      - key: POSTGRES_POOL_MAX_SIZE
+        value: "2"
+      - key: POSTGRES_SCHEMA
+        value: public
+      - key: OPENLIGADB_BASE_URL
+        value: https://api.openligadb.de
+      - key: OPENLIGADB_SHORTCUT
+        value: ucl
+      - key: OPENLIGADB_SEASON
+        value: "2026"
+      - key: OPENLIGADB_EXPECTED_LEAGUE_ID
+        value: "4946"
+      - key: OPENLIGADB_TIMEOUT_SECONDS
+        value: "10"
+      - key: RAW_SNAPSHOT_DIRECTORY
+        value: /tmp/sports-tracker/raw
+      - key: RAW_SNAPSHOT_STORAGE
+        value: object
+      - key: OBJECT_STORAGE_ENDPOINT_URL
+        sync: false
+      - key: OBJECT_STORAGE_BUCKET
+        sync: false
+      - key: OBJECT_STORAGE_REGION
+        sync: false
+      - key: OBJECT_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: OBJECT_STORAGE_PREFIX
+        value: sports-fixtures/raw
+      - key: OBJECT_STORAGE_CONNECT_TIMEOUT_SECONDS
+        value: "10"
+      - key: OBJECT_STORAGE_READ_TIMEOUT_SECONDS
+        value: "30"

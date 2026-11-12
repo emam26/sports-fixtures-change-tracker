@@ -1,0 +1,73 @@
+name: Synchronize OpenLigaDB
+
+on:
+  workflow_dispatch:
+    inputs:
+      activate:
+        description: "Confirm that cloud storage and database prerequisites were verified"
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    # Off-hour minutes reduce accidental burst traffic; GitHub may delay schedules.
+    - cron: "17,47 * * * *"
+
+concurrency:
+  group: sports-fixtures-openligadb-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  synchronize:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.activate == true) ||
+      (github.event_name == 'schedule' && vars.ENABLE_SYNC == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_BACKEND: postgresql
+      POSTGRES_DATABASE_URL: ${{ secrets.POSTGRES_SYNC_DATABASE_URL }}
+      POSTGRES_SSLMODE: verify-full
+      POSTGRES_CHANNEL_BINDING: require
+      POSTGRES_CONNECT_TIMEOUT_SECONDS: "10"
+      POSTGRES_STATEMENT_TIMEOUT_MS: "30000"
+      POSTGRES_POOL_MIN_SIZE: "0"
+      POSTGRES_POOL_MAX_SIZE: "2"
+      POSTGRES_SCHEMA: public
+      OPENLIGADB_BASE_URL: https://api.openligadb.de
+      OPENLIGADB_SHORTCUT: ucl
+      OPENLIGADB_SEASON: "2026"
+      OPENLIGADB_EXPECTED_LEAGUE_ID: "4946"
+      OPENLIGADB_TIMEOUT_SECONDS: "10"
+      OPENLIGADB_LEAGUE_PHASE_MATCHDAYS: 1,2,3,4,5,6,7,8
+      OPENLIGADB_DISCOVER_MATCHDAYS: "yes"
+      OPENLIGADB_INCLUDE_POST_LEAGUE_PHASE: "no"
+      OPENLIGADB_MAX_RETRIES: "3"
+      OPENLIGADB_BACKOFF_INITIAL_SECONDS: "1"
+      OPENLIGADB_BACKOFF_MAX_SECONDS: "8"
+      RAW_SNAPSHOT_DIRECTORY: /tmp/sports-tracker/raw
+      # The workflow must not treat an ephemeral runner filesystem as durable.
+      RAW_SNAPSHOT_STORAGE: object
+      OBJECT_STORAGE_ENDPOINT_URL: ${{ secrets.OBJECT_STORAGE_ENDPOINT_URL }}
+      OBJECT_STORAGE_BUCKET: ${{ secrets.OBJECT_STORAGE_BUCKET }}
+      OBJECT_STORAGE_REGION: ${{ secrets.OBJECT_STORAGE_REGION }}
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${{ secrets.OBJECT_STORAGE_ACCESS_KEY_ID }}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.OBJECT_STORAGE_SECRET_ACCESS_KEY }}
+      OBJECT_STORAGE_PREFIX: sports-fixtures/raw
+      OBJECT_STORAGE_CONNECT_TIMEOUT_SECONDS: "10"
+      OBJECT_STORAGE_READ_TIMEOUT_SECONDS: "30"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install runtime dependencies
+        run: python -m pip install '.[cloud]'
+      - name: Run one bounded synchronization pass
+        run: python scripts/sync_openligadb.py --discover

@@ -46,9 +46,9 @@ from sports_tracker.api.models import (
     TeamInsightDetail,
     ValidationIssue,
 )
-from sports_tracker.api.repository import MatchSort, Repository, SQLServerRepository
+from sports_tracker.api.repository import MatchSort, Repository
 from sports_tracker.config import ApplicationSettings, load_application_settings
-from sports_tracker.runtime import open_sql_server_connection
+from sports_tracker.runtime import configured_repository
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ def create_app(
     settings: ApplicationSettings | None = None,
 ) -> FastAPI:
     app_settings = settings or load_application_settings()
-    repo = repository or SQLServerRepository(open_sql_server_connection)
+    repo = repository or configured_repository()
     web_directory = Path(__file__).resolve().parent.parent / "web"
     public_readonly = app_settings.deployment_mode == "public_readonly"
     app = FastAPI(
@@ -132,6 +132,12 @@ def create_app(
     app.state.repository = repo
     app.state.settings = app_settings
     analytics = AnalyticsService(repo)
+
+    @app.on_event("shutdown")
+    def close_repository_pool() -> None:
+        close = getattr(repo, "close", None)
+        if close is not None:
+            close()
 
     @app.exception_handler(Exception)
     async def unhandled_error(_request: Request, exc: Exception) -> JSONResponse:
