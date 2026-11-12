@@ -26,9 +26,15 @@ def test_evaluation_cli_passes_validated_source_settings_to_loader(
     )
     observed: dict[str, object] = {}
 
-    def fake_load_snapshot(path: Path, received_settings: OpenLigaDBSettings):
+    def fake_load_snapshot(
+        path: Path,
+        received_settings: OpenLigaDBSettings,
+        *,
+        allow_conflicting_nonfinal_results: bool = False,
+    ):
         observed["path"] = path
         observed["settings"] = received_settings
+        observed["allow_conflicting_nonfinal_results"] = allow_conflicting_nonfinal_results
         return SimpleNamespace(matches=())
 
     monkeypatch.setattr(evaluate_snapshot, "load_openligadb_settings", lambda: settings)
@@ -36,7 +42,11 @@ def test_evaluation_cli_passes_validated_source_settings_to_loader(
     monkeypatch.setattr(sys, "argv", ["evaluate_snapshot.py", str(snapshot)])
 
     assert evaluate_snapshot.main() == 0
-    assert observed == {"path": snapshot.resolve(), "settings": settings}
+    assert observed == {
+        "path": snapshot.resolve(),
+        "settings": settings,
+        "allow_conflicting_nonfinal_results": False,
+    }
 
 
 def test_evaluation_cli_explicitly_enables_conflict_quarantine(
