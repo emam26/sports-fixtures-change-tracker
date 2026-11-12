@@ -3,11 +3,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from scripts import sync_openligadb
 
 from sports_tracker.config import OpenLigaDBSettings, SyncSettings
 from sports_tracker.openligadb import RetryPolicy, SeasonDiscovery
 from sports_tracker.synchronization import SyncOutcome
+
+
+@pytest.fixture(autouse=True)
+def _use_sql_server_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlserver")
 
 
 def _source_settings(tmp_path: Path) -> OpenLigaDBSettings:

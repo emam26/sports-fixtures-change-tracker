@@ -5,7 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pyodbc
+import pytest
 from scripts import import_snapshot
+
+
+@pytest.fixture(autouse=True)
+def _use_sql_server_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_BACKEND", "sqlserver")
 
 
 def test_import_parser_exposes_explicit_conflict_recovery_option(tmp_path: Path) -> None:
