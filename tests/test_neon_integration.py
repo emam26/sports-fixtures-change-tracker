@@ -11,6 +11,20 @@ from sports_tracker.postgres import postgresql_connection
 from sports_tracker.storage import NeonS3SnapshotStore
 
 
+@pytest.fixture(autouse=True)
+def _require_dedicated_neon_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    if os.getenv("RUN_NEON_INTEGRATION") != "yes":
+        return
+    if os.getenv("POSTGRES_TEST_CONFIRM_ISOLATED") != "yes":
+        pytest.skip("set POSTGRES_TEST_CONFIRM_ISOLATED=yes for a dedicated target")
+    test_url = os.getenv("POSTGRES_TEST_DATABASE_URL")
+    if not test_url:
+        pytest.skip("set POSTGRES_TEST_DATABASE_URL to a dedicated test database")
+    if test_url == os.getenv("POSTGRES_DATABASE_URL"):
+        pytest.fail("POSTGRES_TEST_DATABASE_URL must not equal the production URL")
+    monkeypatch.setenv("POSTGRES_DATABASE_URL", test_url)
+
+
 @pytest.mark.neon
 def test_opt_in_neon_database_and_object_storage_round_trip() -> None:
     if os.environ.get("RUN_NEON_INTEGRATION") != "yes":

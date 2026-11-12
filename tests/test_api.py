@@ -10,6 +10,21 @@ from sports_tracker.api.app import _is_public_readonly_request, create_app
 from sports_tracker.config import ApplicationSettings
 
 
+def test_application_lifespan_closes_repository() -> None:
+    closed = []
+
+    class ClosableRepository(FakeRepository):
+        def close(self) -> None:
+            closed.append(True)
+
+    repository = ClosableRepository()
+
+    with _test_client(create_app(repository=repository, settings=_settings())):
+        pass
+
+    assert closed == [True]
+
+
 class FakeRepository:
     def __init__(self) -> None:
         self.note = {

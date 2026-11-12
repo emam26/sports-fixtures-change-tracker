@@ -1,9 +1,11 @@
 """FastAPI application factory with local-only defaults."""
 
+import contextlib
 import hmac
 import ipaddress
 import logging
 import re
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated
 
@@ -122,7 +124,18 @@ def create_app(
     repo = repository or configured_repository()
     web_directory = Path(__file__).resolve().parent.parent / "web"
     public_readonly = app_settings.deployment_mode == "public_readonly"
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            close = getattr(repo, "close", None)
+            if close is not None:
+                close()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="Sports Fixtures & Change Tracker",
         version="0.1.0",
         docs_url=None if public_readonly else "/docs",
@@ -132,12 +145,6 @@ def create_app(
     app.state.repository = repo
     app.state.settings = app_settings
     analytics = AnalyticsService(repo)
-
-    @app.on_event("shutdown")
-    def close_repository_pool() -> None:
-        close = getattr(repo, "close", None)
-        if close is not None:
-            close()
 
     @app.exception_handler(Exception)
     async def unhandled_error(_request: Request, exc: Exception) -> JSONResponse:
