@@ -274,6 +274,7 @@ class NeonS3SnapshotStore:
         response_key = self._object_key(key, "response.json")
         metadata_key = self._object_key(key, "metadata.json")
         response_created = False
+        metadata_created = False
         try:
             response_created = self._put_if_absent_or_equal(
                 response_key,
@@ -281,7 +282,7 @@ class NeonS3SnapshotStore:
                 content_type=str(metadata.get("content_type") or "application/json"),
                 metadata={"sha256": digest},
             )
-            self._put_if_absent_or_equal(
+            metadata_created = self._put_if_absent_or_equal(
                 metadata_key,
                 metadata_bytes,
                 content_type="application/json",
@@ -291,15 +292,23 @@ class NeonS3SnapshotStore:
             stored_metadata = self._read_object(metadata_key)
             if stored_body != body or stored_metadata != metadata_bytes:
                 raise SnapshotStorageError(f"snapshot read-after-write verification failed: {key}")
-        except SnapshotStorageError:
-            if response_created:
+        except SnapshotStorageError as upload_error:
+            cleanup_failures: list[str] = []
+            for created, object_key in (
+                (metadata_created, metadata_key),
+                (response_created, response_key),
+            ):
+                if not created:
+                    continue
                 try:
-                    self.client.delete_object(Bucket=self.bucket, Key=response_key)
+                    self.client.delete_object(Bucket=self.bucket, Key=object_key)
                 except Exception as cleanup_error:
-                    raise SnapshotStorageError(
-                        f"snapshot upload failed and cleanup failed for {key}: "
-                        f"{type(cleanup_error).__name__}"
-                    ) from cleanup_error
+                    cleanup_failures.append(f"{object_key}: {type(cleanup_error).__name__}")
+            if cleanup_failures:
+                raise SnapshotStorageError(
+                    f"snapshot upload failed and cleanup failed for {key}; "
+                    "review possible orphan objects: " + ", ".join(cleanup_failures)
+                ) from upload_error
             raise
 
     def put(self, key: str, body: bytes, metadata: dict[str, object]) -> None:
