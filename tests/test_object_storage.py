@@ -146,6 +146,10 @@ def test_object_store_cleans_new_response_after_metadata_upload_failure() -> Non
 
     assert client.objects == {}
 
+    client.fail_metadata_upload = False
+    store.put("snapshot", b"body", _metadata(b"body"))
+    assert client.objects["snapshot/response.json"] == b"body"
+
 
 def test_object_storage_loader_requires_all_credentials_and_redacts_them() -> None:
     values = {
@@ -185,17 +189,40 @@ def test_synchronization_workflow_is_explicitly_gated() -> None:
     assert "RAW_SNAPSHOT_STORAGE: object" in workflow
 
 
-def test_postgresql_role_script_has_no_password_literals_and_no_delete_grant() -> None:
+def test_postgresql_role_script_has_no_password_literals_or_domain_delete_grant() -> None:
     role_sql = (Path(__file__).parents[1] / "sql" / "postgresql" / "002_roles.sql").read_text(
         encoding="utf-8"
     )
 
     executable_sql = re.sub(r"--[^\r\n]*|/\*.*?\*/", "", role_sql, flags=re.MULTILINE | re.DOTALL)
     assert "PASSWORD" not in executable_sql.upper()
-    assert "GRANT DELETE" not in role_sql.upper()
+    delete_grants = re.findall(
+        r"GRANT\s+([^;]+?)\s+ON\s+TABLE\s+([^;]+?)\s+TO\s+[^;]+;",
+        executable_sql,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    assert all(
+        "DELETE" not in privileges.upper()
+        or tables.strip().upper() in {"SYNC_LEASES", "PUBLIC.SYNC_LEASES"}
+        for privileges, tables in delete_grants
+    )
     assert "sports_tracker_api" in role_sql
     assert "sports_tracker_sync" in role_sql
     assert "sports_tracker_migrator" in role_sql
+
+
+def test_postgresql_role_script_uses_scoped_grants() -> None:
+    role_sql = (Path(__file__).parents[1] / "sql" / "postgresql" / "002_roles.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "GRANT SELECT ON ALL TABLES" not in role_sql.upper()
+    assert "ALTER DEFAULT PRIVILEGES IN SCHEMA public\n    GRANT" not in role_sql
+    assert (
+        "GRANT SELECT, INSERT, DELETE ON TABLE public.sync_leases TO sports_tracker_sync;"
+        in role_sql
+    )
+    assert "schema_migrations" not in role_sql
 
 
 def test_evaluation_cli_accepts_a_private_object_key() -> None:

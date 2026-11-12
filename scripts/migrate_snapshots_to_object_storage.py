@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +27,12 @@ class SnapshotMigrationError(RuntimeError):
     """Raised when a local snapshot cannot be reconciled safely."""
 
 
+def _validated_schema(schema: str) -> str:
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema) is None:
+        raise SnapshotMigrationError("PostgreSQL schema must be a simple SQL identifier")
+    return schema
+
+
 @dataclass(frozen=True)
 class SnapshotTransfer:
     source_snapshot_id: int
@@ -33,6 +41,10 @@ class SnapshotTransfer:
     body: bytes
     metadata_bytes: bytes
     sha256: str
+
+
+def _row_value(row: Any, key: str, index: int) -> Any:
+    return row[key] if isinstance(row, Mapping) else row[index]
 
 
 def _utc_text(value: Any) -> str:
@@ -148,11 +160,14 @@ def _verify_target_references(
             raise SnapshotMigrationError(
                 f"PostgreSQL is missing source snapshot {transfer.source_snapshot_id}"
             )
-        if str(row[0]).lower() != transfer.sha256:
+        if str(_row_value(row, "sha256", 0)).lower() != transfer.sha256:
             raise SnapshotMigrationError(
                 f"PostgreSQL source snapshot {transfer.source_snapshot_id} has a hash mismatch"
             )
-        if str(row[1]) not in {transfer.old_local_directory, transfer.object_key}:
+        if str(_row_value(row, "local_directory", 1)) not in {
+            transfer.old_local_directory,
+            transfer.object_key,
+        }:
             raise SnapshotMigrationError(
                 f"PostgreSQL source snapshot {transfer.source_snapshot_id} has an "
                 "unexpected locator"
@@ -160,39 +175,45 @@ def _verify_target_references(
 
 
 def migrate_snapshots(*, apply: bool, schema: str = "public") -> int:
+    schema = _validated_schema(schema)
     object_settings = load_object_storage_settings()
     transfers = _load_transfers(object_settings)
     with postgresql_connection(load_postgresql_settings()) as target:
-        _verify_target_references(target, transfers, schema)
-        if not apply:
-            return len(transfers)
-        store = NeonS3SnapshotStore(object_settings)
-        for transfer in transfers:
-            store.put_files(
-                transfer.object_key,
-                transfer.body,
-                transfer.metadata_bytes,
-                expected_sha256=transfer.sha256,
-            )
-        cursor = target.cursor()
-        for transfer in transfers:
-            cursor.execute(
-                f'UPDATE "{schema}"."source_snapshots" '
-                "SET local_directory = %s, response_path = %s, metadata_path = %s "
-                "WHERE source_snapshot_id = %s AND sha256 = %s",
-                (
+        try:
+            _verify_target_references(target, transfers, schema)
+            if not apply:
+                target.rollback()
+                return len(transfers)
+            store = NeonS3SnapshotStore(object_settings)
+            for transfer in transfers:
+                store.put_files(
                     transfer.object_key,
-                    f"{transfer.object_key}/response.json",
-                    f"{transfer.object_key}/metadata.json",
-                    transfer.source_snapshot_id,
-                    transfer.sha256,
-                ),
-            )
-            if cursor.rowcount != 1:
-                raise SnapshotMigrationError(
-                    f"could not update PostgreSQL source snapshot {transfer.source_snapshot_id}"
+                    transfer.body,
+                    transfer.metadata_bytes,
+                    expected_sha256=transfer.sha256,
                 )
-        target.commit()
+            cursor = target.cursor()
+            for transfer in transfers:
+                cursor.execute(
+                    f'UPDATE "{schema}"."source_snapshots" '
+                    "SET local_directory = %s, response_path = %s, metadata_path = %s "
+                    "WHERE source_snapshot_id = %s AND sha256 = %s",
+                    (
+                        transfer.object_key,
+                        f"{transfer.object_key}/response.json",
+                        f"{transfer.object_key}/metadata.json",
+                        transfer.source_snapshot_id,
+                        transfer.sha256,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise SnapshotMigrationError(
+                        f"could not update PostgreSQL source snapshot {transfer.source_snapshot_id}"
+                    )
+            target.commit()
+        except Exception:
+            target.rollback()
+            raise
     return len(transfers)
 
 

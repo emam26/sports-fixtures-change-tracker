@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from collections.abc import Iterable, Sequence
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,6 +21,12 @@ from sports_tracker.postgres import postgresql_connection
 
 class MigrationMismatchError(RuntimeError):
     """Raised when an existing PostgreSQL row differs from the SQL Server row."""
+
+
+def _validated_schema(schema: str) -> str:
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema) is None:
+        raise MigrationMismatchError("PostgreSQL schema must be a simple SQL identifier")
+    return schema
 
 
 TABLE_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -253,8 +260,8 @@ TABLE_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 def _utc_value(value: Any) -> Any:
     if isinstance(value, datetime):
         return (value if value.tzinfo else value.replace(tzinfo=UTC)).astimezone(UTC).isoformat()
-    if isinstance(value, bytes):
-        return value.hex()
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
     return value
 
 
@@ -303,7 +310,28 @@ def _fetch_target_row(
         f'SELECT {quoted} FROM "{schema}"."{table}" WHERE "{primary_key}" = %s',
         (primary_value,),
     )
-    return cursor.fetchone()
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    if isinstance(row, Mapping):
+        return tuple(row[column] for column in columns)
+    return tuple(row)
+
+
+def _fetch_target_rows(
+    connection: Any,
+    table: str,
+    primary_key: str,
+    columns: tuple[str, ...],
+    schema: str,
+) -> list[tuple[Any, ...]]:
+    cursor = connection.cursor()
+    quoted = ", ".join(f'"{column}"' for column in columns)
+    cursor.execute(f'SELECT {quoted} FROM "{schema}"."{table}" ORDER BY "{primary_key}"')
+    rows = cursor.fetchall()
+    if rows and isinstance(rows[0], Mapping):
+        return [tuple(row[column] for column in columns) for row in rows]
+    return [tuple(row) for row in rows]
 
 
 def _insert_target_row(
@@ -324,52 +352,66 @@ def _insert_target_row(
 def reconcile_and_migrate(*, apply: bool, schema: str = "public") -> dict[str, dict[str, Any]]:
     """Reconcile all rows and optionally insert only missing identical rows."""
 
+    schema = _validated_schema(schema)
     report: dict[str, dict[str, Any]] = {}
     with database_connection(load_database_settings()) as source:
         with postgresql_connection(load_postgresql_settings()) as target:
-            for table, primary_key, columns in TABLE_SPECS:
-                source_rows = _fetch_source_rows(source, table, primary_key, columns)
-                target_columns = _target_columns(table, columns)
-                inserted = 0
-                for source_row in source_rows:
-                    values = _target_values(table, columns, source_row)
-                    target_row = _fetch_target_row(
+            try:
+                for table, primary_key, columns in TABLE_SPECS:
+                    source_rows = _fetch_source_rows(source, table, primary_key, columns)
+                    target_columns = _target_columns(table, columns)
+                    target_rows = _fetch_target_rows(
                         target,
                         table,
                         primary_key,
                         target_columns,
-                        source_row[columns.index(primary_key)],
                         schema,
                     )
-                    if target_row is not None:
-                        if stable_row_hash((target_row,)) != stable_row_hash((values,)):
-                            raise MigrationMismatchError(
-                                f"target mismatch in {table}.{primary_key}="
-                                f"{source_row[columns.index(primary_key)]}"
-                            )
-                        continue
-                    if apply:
-                        _insert_target_row(target, table, target_columns, values, schema)
-                        inserted += 1
-                report[table] = {
-                    "source_count": len(source_rows),
-                    "inserted": inserted,
-                    "source_hash": stable_row_hash(source_rows),
-                }
-            if apply:
-                sequence_cursor = target.cursor()
-                for table, columns in TABLE_SPECS:
-                    primary_key = columns[0]
-                    sequence_cursor.execute(
-                        "SELECT setval(pg_get_serial_sequence(%s, %s), "
-                        f'COALESCE((SELECT MAX("{primary_key}") '
-                        f'FROM "{schema}"."{table}"), 1), '
-                        f'(SELECT COUNT(*) > 0 FROM "{schema}"."{table}"))',
-                        (f"{schema}.{table}", primary_key),
-                    )
-                target.commit()
-            else:
+                    target_by_id = {row[0]: row for row in target_rows}
+                    inserted = 0
+                    for source_row in source_rows:
+                        values = _target_values(table, columns, source_row)
+                        primary_value = source_row[columns.index(primary_key)]
+                        target_row = target_by_id.get(primary_value)
+                        if target_row is not None:
+                            if stable_row_hash((target_row,)) != stable_row_hash((values,)):
+                                raise MigrationMismatchError(
+                                    f"target mismatch in {table}.{primary_key}={primary_value}"
+                                )
+                            continue
+                        if apply:
+                            _insert_target_row(target, table, target_columns, values, schema)
+                            inserted += 1
+                    source_ids = {row[columns.index(primary_key)] for row in source_rows}
+                    extra_ids = sorted(set(target_by_id) - source_ids)
+                    if extra_ids:
+                        raise MigrationMismatchError(
+                            f"target has rows absent from SQL Server in {table}."
+                            f"{primary_key}: {extra_ids[:5]}"
+                        )
+                    report[table] = {
+                        "source_count": len(source_rows),
+                        "target_count": len(target_rows),
+                        "inserted": inserted,
+                        "source_hash": stable_row_hash(source_rows),
+                    }
+                if apply:
+                    sequence_cursor = target.cursor()
+                    for table, columns in TABLE_SPECS:
+                        primary_key = columns[0]
+                        sequence_cursor.execute(
+                            "SELECT setval(pg_get_serial_sequence(%s, %s), "
+                            f'COALESCE((SELECT MAX("{primary_key}") '
+                            f'FROM "{schema}"."{table}"), 1), '
+                            f'(SELECT COUNT(*) > 0 FROM "{schema}"."{table}"))',
+                            (f"{schema}.{table}", primary_key),
+                        )
+                    target.commit()
+                else:
+                    target.rollback()
+            except Exception:
                 target.rollback()
+                raise
     return report
 
 
@@ -396,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
     for table, details in report.items():
         print(
             f"{table}: source={details['source_count']} "
+            f"target_before={details['target_count']} "
             f"inserted={details['inserted']} hash={details['source_hash']}"
         )
     return 0

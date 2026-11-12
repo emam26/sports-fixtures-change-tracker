@@ -5,7 +5,11 @@ import json
 from pathlib import Path
 
 import pytest
-from scripts.migrate_snapshots_to_object_storage import SnapshotMigrationError, _read_transfer
+from scripts.migrate_snapshots_to_object_storage import (
+    SnapshotMigrationError,
+    _read_transfer,
+    _row_value,
+)
 
 from sports_tracker.config import ObjectStorageSettings
 
@@ -107,3 +111,10 @@ def test_snapshot_migration_rejects_corrupt_referenced_file(tmp_path: Path) -> N
 
     with pytest.raises(SnapshotMigrationError, match="response bytes"):
         _read_transfer(row, _object_settings())
+
+
+def test_snapshot_migration_reads_psycopg_mapping_rows() -> None:
+    row = {"sha256": "digest", "local_directory": "local-key"}
+
+    assert _row_value(row, "sha256", 0) == "digest"
+    assert _row_value(row, "local_directory", 1) == "local-key"

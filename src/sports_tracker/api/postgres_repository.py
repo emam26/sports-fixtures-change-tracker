@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
@@ -32,6 +33,8 @@ class PostgreSQLRepository:
     """Small PostgreSQL query layer with parameterized SQL and owned connections."""
 
     def __init__(self, connection_factory: Callable[[], Any], schema: str = "public") -> None:
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema) is None:
+            raise ValueError("PostgreSQL schema must be a simple SQL identifier")
         self._connection_factory = connection_factory
         self._schema = schema
 
