@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -26,12 +26,32 @@ TABLE_NAMES = (
 )
 
 TIMESTAMP_POLICY = (
+    "Documented *_utc values treat naive SQL Server datetimes as UTC. "
     "Datetime values are normalized to UTC and compared at Python microsecond precision. "
     "SQL Server datetime2(7) sub-microsecond precision is not representable by this report "
     "and must not be treated as independently verified."
 )
 
 PARITY_STATUSES = ("MATCH", "MISMATCH", "MISSING", "NOT CHECKED", "ERROR")
+
+SYNC_CHECKPOINT_ROWVERSION_COLUMN = "checkpoint_version"
+SYNC_CHECKPOINT_SOURCE_ROWVERSION_COLUMN = "source_checkpoint_version"
+
+UTC_DATETIME_COLUMNS = frozenset(
+    {
+        "kickoff_utc",
+        "retrieved_at_utc",
+        "captured_at_utc",
+        "created_at_utc",
+        "updated_at_utc",
+        "started_at_utc",
+        "completed_at_utc",
+        "changed_at_utc",
+        "imported_at_utc",
+        "expires_at_utc",
+        "last_seen_at_utc",
+    }
+)
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -96,8 +116,19 @@ def _lookup(row: Mapping[str, Any], name: str) -> Any:
     return None
 
 
-def _normalize(value: Any) -> Any:
+def _normalize(value: Any, *, column_name: str | None = None) -> Any:
+    """Canonicalize values without hiding documented transformation differences.
+
+    Naive values in documented ``*_utc`` columns are SQL Server UTC values.
+    Datetimes are compared at Python microsecond precision; SQL Server
+    sub-microsecond precision is not independently verified.
+    """
     if isinstance(value, datetime):
+        column = column_name.casefold() if column_name is not None else None
+        if column in UTC_DATETIME_COLUMNS or (column is not None and column.endswith("_utc")):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=UTC)
+            return value.astimezone(UTC).isoformat(timespec="microseconds")
         if value.tzinfo is None:
             return {
                 "datetime": value.isoformat(timespec="microseconds"),
@@ -120,8 +151,13 @@ def _normalize(value: Any) -> Any:
     return value
 
 
-def _canonical(value: Any) -> str:
-    return json.dumps(_normalize(value), sort_keys=True, separators=(",", ":"), default=str)
+def _canonical(value: Any, *, column_name: str | None = None) -> str:
+    return json.dumps(
+        _normalize(value, column_name=column_name),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def _row_key(table: str, row: Mapping[str, Any]) -> str:
@@ -166,7 +202,17 @@ def _duplicate_keys(table: str, rows: list[dict[str, Any]]) -> list[str]:
     return sorted(key for key, count in counts.items() if count > 1)
 
 
-def compare_table(
+def _is_valid_application_checkpoint_version(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        integer_value = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return integer_value >= 0 and integer_value == value
+
+
+def _legacy_compare_table(
     table: str,
     source_columns: tuple[str, ...],
     source_rows: list[dict[str, Any]],
@@ -186,18 +232,41 @@ def compare_table(
     common_columns = tuple(
         source_column_map[name] for name in sorted(set(source_column_map) & set(target_column_map))
     )
+    checkpoint_mapping = table == "sync_checkpoints"
+    source_has_rowversion = SYNC_CHECKPOINT_ROWVERSION_COLUMN.casefold() in source_column_map
+    target_has_source_rowversion = (
+        SYNC_CHECKPOINT_SOURCE_ROWVERSION_COLUMN.casefold() in target_column_map
+    )
+    target_has_application_version = (
+        SYNC_CHECKPOINT_ROWVERSION_COLUMN.casefold() in target_column_map
+    )
+    mapping_errors: list[str] = []
+    if checkpoint_mapping:
+        if not source_has_rowversion:
+            mapping_errors.append("source sync_checkpoints.checkpoint_version is missing")
+        if not target_has_source_rowversion:
+            mapping_errors.append("target sync_checkpoints.source_checkpoint_version is missing")
+        if not target_has_application_version:
+            mapping_errors.append("target sync_checkpoints.checkpoint_version is missing")
+
     differences: list[dict[str, Any]] = []
     for key in sorted(set(source_by_key) & set(target_by_key)):
         source = source_by_key[key]
         target = target_by_key[key]
         changed = {
             column: {
-                "source": _normalize(_lookup(source, column)),
-                "target": _normalize(_lookup(target, target_column_map[column.casefold()])),
+                "source": _normalize(_lookup(source, column), column_name=column),
+                "target": _normalize(
+                    _lookup(target, target_column_map[column.casefold()]),
+                    column_name=target_column_map[column.casefold()],
+                ),
             }
             for column in common_columns
-            if _canonical(_lookup(source, column))
-            != _canonical(_lookup(target, target_column_map[column.casefold()]))
+            if _canonical(_lookup(source, column), column_name=column)
+            != _canonical(
+                _lookup(target, target_column_map[column.casefold()]),
+                column_name=target_column_map[column.casefold()],
+            )
         }
         if changed and len(differences) < 100:
             differences.append({"key": key, "fields": changed})
@@ -312,6 +381,154 @@ def _semantic_summary(rows_by_table: dict[str, list[dict[str, Any]]]) -> dict[st
         "checkpoint_keys": sorted(
             _row_key("sync_checkpoints", row) for row in rows_by_table.get("sync_checkpoints", [])
         ),
+    }
+
+
+def compare_table(
+    table: str,
+    source_columns: Sequence[str],
+    source_rows: Sequence[Mapping[str, Any]],
+    target_columns: Sequence[str],
+    target_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    source_by_key = _keyed(table, source_rows)
+    target_by_key = _keyed(table, target_rows)
+    source_duplicate_keys = _duplicate_keys(table, source_rows)
+    target_duplicate_keys = _duplicate_keys(table, target_rows)
+    source_column_map = {column.casefold(): column for column in source_columns}
+    target_column_map = {column.casefold(): column for column in target_columns}
+    source_names = set(source_column_map)
+    target_names = set(target_column_map)
+    checkpoint_mapping = table == "sync_checkpoints"
+    mapping_errors: list[str] = []
+    invariant_violations: list[str] = []
+    excluded_source_columns: set[str] = set()
+    excluded_target_columns: set[str] = set()
+
+    if checkpoint_mapping:
+        source_has_rowversion = SYNC_CHECKPOINT_ROWVERSION_COLUMN in source_names
+        target_has_source_rowversion = SYNC_CHECKPOINT_SOURCE_ROWVERSION_COLUMN in target_names
+        target_has_application_version = SYNC_CHECKPOINT_ROWVERSION_COLUMN in target_names
+        if not source_has_rowversion:
+            mapping_errors.append("source sync_checkpoints.checkpoint_version is missing")
+        if not target_has_source_rowversion:
+            mapping_errors.append("target sync_checkpoints.source_checkpoint_version is missing")
+        if not target_has_application_version:
+            mapping_errors.append("target sync_checkpoints.checkpoint_version is missing")
+        excluded_source_columns.add(SYNC_CHECKPOINT_ROWVERSION_COLUMN)
+        excluded_target_columns.update(
+            {
+                SYNC_CHECKPOINT_ROWVERSION_COLUMN,
+                SYNC_CHECKPOINT_SOURCE_ROWVERSION_COLUMN,
+            }
+        )
+    else:
+        source_has_rowversion = False
+        target_has_source_rowversion = False
+
+    common_columns = tuple(
+        source_column_map[name]
+        for name in sorted(
+            (source_names - excluded_source_columns) & (target_names - excluded_target_columns)
+        )
+    )
+    differences: list[dict[str, Any]] = []
+    for key in sorted(set(source_by_key) & set(target_by_key)):
+        source = source_by_key[key]
+        target = target_by_key[key]
+        changed: dict[str, Any] = {}
+        for column in common_columns:
+            target_column = target_column_map[column.casefold()]
+            source_value = _lookup(source, column)
+            target_value = _lookup(target, target_column)
+            if _canonical(source_value, column_name=column) != _canonical(
+                target_value, column_name=target_column
+            ):
+                changed[column] = {
+                    "source": _normalize(source_value, column_name=column),
+                    "target": _normalize(target_value, column_name=target_column),
+                }
+
+        if checkpoint_mapping:
+            source_rowversion = _lookup(source, SYNC_CHECKPOINT_ROWVERSION_COLUMN)
+            target_rowversion = _lookup(target, SYNC_CHECKPOINT_SOURCE_ROWVERSION_COLUMN)
+            if (
+                source_has_rowversion
+                and target_has_source_rowversion
+                and (
+                    _canonical(
+                        source_rowversion,
+                        column_name=SYNC_CHECKPOINT_ROWVERSION_COLUMN,
+                    )
+                    != _canonical(
+                        target_rowversion,
+                        column_name=SYNC_CHECKPOINT_SOURCE_ROWVERSION_COLUMN,
+                    )
+                )
+            ):
+                changed["checkpoint_version -> source_checkpoint_version"] = {
+                    "source": _normalize(
+                        source_rowversion,
+                        column_name=SYNC_CHECKPOINT_ROWVERSION_COLUMN,
+                    ),
+                    "target": _normalize(
+                        target_rowversion,
+                        column_name=SYNC_CHECKPOINT_SOURCE_ROWVERSION_COLUMN,
+                    ),
+                }
+
+            application_version = _lookup(target, SYNC_CHECKPOINT_ROWVERSION_COLUMN)
+            if not _is_valid_application_checkpoint_version(application_version):
+                invariant_violations.append(
+                    f"{key}: target checkpoint_version must be a non-negative integer"
+                )
+                changed["checkpoint_version (application invariant)"] = {
+                    "target": _normalize(
+                        application_version,
+                        column_name=SYNC_CHECKPOINT_ROWVERSION_COLUMN,
+                    ),
+                    "expected": "non-negative integer",
+                }
+
+        if changed:
+            differences.append({"key": key, "changes": changed})
+
+    source_only = sorted(set(source_by_key) - set(target_by_key))
+    target_only = sorted(set(target_by_key) - set(source_by_key))
+    if checkpoint_mapping:
+        schema_difference = sorted(
+            (source_names - excluded_source_columns) ^ (target_names - excluded_target_columns)
+        )
+        schema_difference.extend(mapping_errors)
+    else:
+        schema_difference = sorted(source_names ^ target_names)
+
+    if source_only or target_only:
+        status = "MISSING"
+    elif differences or schema_difference or source_duplicate_keys or target_duplicate_keys:
+        status = "MISMATCH"
+    else:
+        status = "MATCH"
+
+    return {
+        "table": table,
+        "status": status,
+        "source_count": len(source_rows),
+        "target_count": len(target_rows),
+        "source_only_keys": source_only,
+        "target_only_keys": target_only,
+        "source_duplicate_keys": source_duplicate_keys,
+        "target_duplicate_keys": target_duplicate_keys,
+        "row_differences": differences,
+        "schema_difference": schema_difference,
+        "source_columns": list(source_columns),
+        "target_columns": list(target_columns),
+        "transformation_mapping": (
+            ["sync_checkpoints.checkpoint_version -> sync_checkpoints.source_checkpoint_version"]
+            if checkpoint_mapping
+            else []
+        ),
+        "application_invariant_violations": invariant_violations,
     }
 
 
