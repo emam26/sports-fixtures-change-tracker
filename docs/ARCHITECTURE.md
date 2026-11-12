@@ -245,6 +245,24 @@ Import runs, validation issues, and synchronization checkpoints remain available
 through loopback API routes and local development/diagnostic tooling. The public
 browser dashboard neither requests nor renders those operational records.
 
+## Persistence backend selection
+
+`DATABASE_BACKEND=sqlserver` remains the local default and uses the unchanged pyodbc
+store/repository. `DATABASE_BACKEND=postgresql` selects Psycopg connections,
+`PostgreSQLImportStore`, `PostgreSQLRepository`, PostgreSQL checkpoint readers, and the
+database lease used by unattended synchronization. Parsing, validation, change
+calculation, conflict quarantine, and snapshot replay remain shared Python logic.
+
+The PostgreSQL schema is a separate reviewed artifact at
+`sql/postgresql/001_initial_schema.sql`; it uses `timestamptz`, boolean values,
+`RETURNING`, `LATERAL`, `LIMIT/OFFSET`, and an explicit checkpoint counter because
+SQL Server `datetime2`, `bit`, `OUTPUT/SCOPE_IDENTITY`, `OUTER APPLY`, pagination, and
+`rowversion` are not portable. The migration utility compares existing rows and stops
+on mismatches. Cloud synchronization writes and verifies private S3-compatible
+snapshot objects before import; missing credentials or an unavailable object store
+fail before checkpoint advancement. Local disk is staging only and is not treated as
+a Render/GitHub archive.
+
 ## Deployed schema assumptions
 
 The implementation reuses the owner's deployed 12 tables without migration:

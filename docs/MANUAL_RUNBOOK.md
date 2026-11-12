@@ -778,7 +778,203 @@ Use the confirmed distribution name in Task Scheduler exactly as documented in
 `DEPLOYMENT_LOCAL.md`. Select "Do not start a new instance". The application lock is
 the second guard. Do not put secrets in task arguments or descriptions.
 
-## 13. Final Git review, commit, and push
+## 13. PostgreSQL/Neon migration and deployment foundation
+
+This section is owner-executed and remains **NOT RUN**. It does not change the local
+SQL Server database. Use a disposable Neon project/branch first, separate from the
+eventual production target. Keep `POSTGRES_DATABASE_URL` in the local environment only.
+
+### 13.1 Offline checks before any database action
+
+Where: WSL Bash, project directory, with the local environment activated.
+
+```bash
+cd /mnt/f/sports-fixtures-change-tracker
+source .venv/bin/activate
+python -m pip install --editable '.[dev,sqlserver,cloud]'
+ruff check .
+ruff format --check .
+python -m pytest -q -m "not sqlserver"
+```
+
+Expected: installation, lint, formatting, and offline tests complete successfully.
+These checks were not run while preparing this handoff. Stop on the first failure.
+
+### 13.2 Review and apply the PostgreSQL schema
+
+Where: confirmed PostgreSQL client, disposable Neon database.
+
+```bash
+psql "$POSTGRES_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f sql/postgresql/001_initial_schema.sql
+```
+
+Expected: one transaction creates the twelve logical application tables, migration
+ledger, and `sync_leases`, then commits. Review the SQL before execution. Do not use
+the SQL Server `sql/001_initial_schema.sql` against Neon.
+
+Run the role-grant script as the database owner after reviewing it:
+
+```bash
+psql "$POSTGRES_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f sql/postgresql/002_roles.sql
+```
+
+Create separate provider-managed LOGIN credentials and grant membership to
+`sports_tracker_api`, `sports_tracker_sync`, and `sports_tracker_migrator`. Do not put
+those passwords in this repository or command history.
+
+### 13.3 Migration preview, reconciliation, and apply
+
+Where: WSL Bash, project directory. The local `.env` must contain SQL Server values;
+PostgreSQL values must be supplied through the current shell or a private local env.
+
+```bash
+export DATABASE_BACKEND=postgresql
+export RAW_SNAPSHOT_STORAGE=local
+python scripts/migrate_sqlserver_to_postgres.py
+```
+
+Expected: `Migration previewed; source rows were not modified.` followed by source
+counts and hashes for every logical table. Stop if a row mismatch, foreign-key error,
+or unexpected count appears. Review the report before applying.
+
+```bash
+python scripts/migrate_sqlserver_to_postgres.py --apply
+```
+
+Expected: `Migration applied; source rows were not modified.` and zero unexpected
+mismatches. The utility is restart-safe for identical rows and stops/rolls back on a
+different existing target row. It does not reconstruct change history from current
+fixtures. Raw response migration is a separate verified step below.
+
+### 13.4 Historical raw snapshot migration to private object storage
+
+This command is preview-only unless `--apply` is supplied. It validates every SQL
+Server snapshot's response bytes, metadata, byte count, SHA-256, identity fields, and
+target provenance before making changes. It preserves exact response and metadata bytes
+in private object storage and updates only PostgreSQL snapshot locators. SQL Server is
+never modified.
+
+```bash
+python scripts/migrate_snapshots_to_object_storage.py
+```
+
+Expected: `Snapshot migration previewed; verified N snapshots.` Stop for any missing,
+corrupt, unreconciled, or unexpected target snapshot.
+
+```bash
+python scripts/migrate_snapshots_to_object_storage.py --apply
+```
+
+Expected: `Snapshot migration applied; verified N snapshots.` Object keys are
+content-addressed and retrieval-time-qualified, so identical retries are safe. A
+database rollback cannot undo an object upload; failed uploads are cleaned when
+possible, and any reported orphan key must be reviewed before retrying.
+
+To replay one verified cloud snapshot without another provider request:
+
+```bash
+python scripts/evaluate_snapshot.py --object-key "$OBJECT_KEY"
+```
+
+Expected: the stored SHA-256 and parsed match count are printed, followed by the
+no-network/no-database-write notice.
+
+If an import fails after object persistence, do not delete the object automatically.
+Inspect referenced keys first:
+
+```bash
+psql "$POSTGRES_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -c 'SELECT source_snapshot_id, local_directory, sha256 FROM source_snapshots ORDER BY source_snapshot_id;'
+```
+
+Using the confirmed Neon S3-compatible console or client, list the configured private
+prefix and compare it with those locators. Retain any object whose hash is referenced
+or whose failed import still needs replay. Delete an unreferenced orphan only after
+reviewing its hash and failed-run provenance; the application does not perform an
+automatic destructive cleanup.
+
+### 13.5 PostgreSQL parity checks
+
+Where: confirmed PostgreSQL client, target database.
+
+```bash
+psql "$POSTGRES_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+SELECT 'matches' AS table_name, COUNT(*) FROM matches
+UNION ALL SELECT 'match_results', COUNT(*) FROM match_results
+UNION ALL SELECT 'match_goals', COUNT(*) FROM match_goals
+UNION ALL SELECT 'match_changes', COUNT(*) FROM match_changes
+UNION ALL SELECT 'source_snapshots', COUNT(*) FROM source_snapshots
+UNION ALL SELECT 'import_runs', COUNT(*) FROM import_runs
+UNION ALL SELECT 'sync_checkpoints', COUNT(*) FROM sync_checkpoints;
+SELECT COUNT(*) AS orphan_matches
+FROM matches AS m
+LEFT JOIN competition_seasons AS cs ON cs.competition_season_id = m.competition_season_id
+WHERE cs.competition_season_id IS NULL;
+SQL
+```
+
+Expected: counts match the reviewed SQL Server export, `orphan_matches` is zero, and
+no score is populated for an unfinished fixture unless the source supplied a valid
+result. Return only non-secret counts and mismatch details.
+
+### 13.6 Local PostgreSQL API/import smoke checks
+
+Where: WSL Bash, project directory, using the disposable PostgreSQL target.
+
+```bash
+export DATABASE_BACKEND=postgresql
+export API_DEPLOYMENT_MODE=public_readonly
+export API_LOCAL_ONLY=no
+python scripts/run_api.py --host 127.0.0.1 --port 8000
+```
+
+The local wrapper intentionally rejects non-loopback binding; for a manual factory
+smoke check use the Render-equivalent command in a separate terminal only after the
+target is reviewed:
+
+```bash
+uvicorn sports_tracker.api.app:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+Expected: `/api/competitions`, `/api/matches`, `/api/dashboard-summary`, and
+`/api/freshness` return the same public response contract as SQL Server. Notes and all
+operational routes remain unavailable in `public_readonly` mode.
+
+### 13.7 PostgreSQL roles and cloud activation checklist
+
+Do not activate the checked-in workflow or create the Render service until all are true:
+
+- a private durable object-storage provider and API have been manually verified for
+  immutable `response.json`/`metadata.json` writes, reads, hash checks, and replay;
+- `sql/postgresql/002_roles.sql` has been reviewed and applied by the Neon owner, and
+  separate LOGIN credentials have been granted membership in the API and sync groups;
+- Neon roles are separated into migration owner, synchronization writer, and dashboard
+  reader, with TLS certificate verification and no browser-visible credentials;
+- `POSTGRES_SYNC_DATABASE_URL` is stored only as a GitHub Actions secret and the
+  Render `POSTGRES_DATABASE_URL` is stored only as a Render secret;
+- the schema, migration preview/apply, row/key/hash reconciliation, API parity, and
+  duplicate-replay checks have been reviewed;
+- a manual workflow dispatch with `activate=true` succeeds, advances a checkpoint only after import success,
+  and preserves a failed run without partial current rows.
+
+After the disposable Neon target and private bucket are ready, run the opt-in cloud
+smoke test only with a dedicated verification target:
+
+```bash
+RUN_NEON_INTEGRATION=yes python -m pytest -q -m neon
+```
+
+Expected: one database connectivity assertion and one temporary object round trip pass;
+the test deletes only its generated verification objects. This remains **NOT RUN**.
+
+The workflow schedule is twice per hour at UTC minutes 17 and 47. GitHub may delay or
+drop scheduled events; this is best-effort synchronization, not a real-time guarantee.
+OpenLigaDB's 60-requests-per-minute limit remains in force, and aggressive polling is
+prohibited. No cloud command, migration, synchronization, or deployment was run here.
+
+## 14. Final Git review, commit, and push
 
 Prerequisite: all intended evidence is recorded in `docs/BUILD_PLAN.md`. The project
 owner performs every Git operation.

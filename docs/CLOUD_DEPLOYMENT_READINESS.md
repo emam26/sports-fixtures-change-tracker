@@ -5,6 +5,11 @@
 **Target:** Render Free web service, Azure SQL Database, GitHub Actions synchronization, and GitHub source control
 **Status:** Repository inspection only; no implementation, deployment, migration, or operational execution was performed.
 
+**Current decision context:** This document remains the historical Azure SQL networking
+assessment. The selected replacement architecture is Render + Neon PostgreSQL/private
+object storage + GitHub Actions; see [`POSTGRES_DEPLOYMENT_FEASIBILITY.md`](POSTGRES_DEPLOYMENT_FEASIBILITY.md)
+for the current implementation and verification gates.
+
 ## Executive recommendation
 
 **Immediate public deployment: NO-GO.**

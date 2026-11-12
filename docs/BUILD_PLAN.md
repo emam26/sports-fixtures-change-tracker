@@ -1,5 +1,20 @@
 # Build Plan
 
+## Current deployment foundation - 2026-11-12
+
+The working tree now contains a separate PostgreSQL compatibility path alongside the
+unchanged SQL Server path: validated backend selection, Psycopg connections, a translated
+12-table schema plus migration ledger, PostgreSQL import/API/checkpoint/lease adapters,
+and a mismatch-stopping SQL Server-to-PostgreSQL migration utility. Render and GitHub
+Actions descriptors are present. Snapshot storage has immutable local and private
+S3-compatible adapters, with exact-byte verification before import. The workflow is
+explicitly gated until the owner verifies the endpoint, roles, migration, and replay.
+
+Changed foundation files are listed in `docs/PROJECT_STATE.md` and the detailed SQL,
+timestamp, identity, permission, and free-tier trade-offs remain in
+`docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md`. No execution checks were run for this batch.
+The next manual step is the offline verification sequence in `docs/MANUAL_RUNBOOK.md`.
+
 ## Current scope
 
 The project implements UEFA Champions League 2026/27 through OpenLigaDB:
@@ -823,3 +838,20 @@ the dashboard. These require deployment controls or a later security phase.
 No Python, tests, Ruff, SQL, database operation, HTTP request, synchronization,
 deployment, or Git operation was executed for this review. All execution checks
 remain **NOT RUN**.
+
+### 2026-11-11 Cloud network feasibility review (NOT RUN)
+
+Added `docs/CLOUD_NETWORK_FEASIBILITY.md` after reviewing current official Render,
+Azure SQL, Azure OIDC, and GitHub Actions documentation. The exact Render Free +
+Azure SQL Free + standard GitHub-hosted Actions architecture is **NO-GO** for a
+security-sensitive public deployment: Render uses shared regional egress ranges,
+standard GitHub runners have dynamic shared IPs, and temporary Azure SQL firewall
+rules have propagation, cleanup, concurrency, and privilege risks. A disposable
+low-sensitivity proof of concept is documented as **CONDITIONAL GO** only.
+
+The recommended design uses controlled/private Azure connectivity for the API and
+synchronization paths, separate least-privilege identities, and OIDC only as
+short-lived Azure control-plane authentication. No provider account, cloud
+resource, firewall, database, workflow, code, SQL, credential, or configuration was
+modified. No tests, Python, Git, SQL, HTTP, synchronization, deployment, or network
+commands were executed; all execution checks remain **NOT RUN**.

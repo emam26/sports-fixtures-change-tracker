@@ -3,12 +3,17 @@
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![SQL Server](https://img.shields.io/badge/Database-SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/Cloud%20database-PostgreSQL-4169E1?logo=postgresql&logoColor=white)
 ![OpenLigaDB](https://img.shields.io/badge/Source-OpenLigaDB-1F2937)
 
 A local-first football data pipeline that preserves OpenLigaDB observations, validates
 and imports them transactionally into Microsoft SQL Server, records field-level
 changes, and presents the resulting fixture history through a small FastAPI service
 and a framework-free browser dashboard.
+
+SQL Server remains the default local backend. A separate PostgreSQL/Neon backend,
+repeatable migration utility, Render descriptor, and GitHub Actions workflow are now
+implemented as deployment foundations; cloud execution remains owner-verified work.
 
 The project is deliberately designed as an auditable data-engineering system rather
 than a live-score scraper. Raw source bytes, provenance, validation outcomes, current
@@ -167,7 +172,7 @@ for reproducibility and were **not run while preparing this README**.
 cd /mnt/f/sports-fixtures-change-tracker
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --editable '.[dev]'
+python -m pip install --editable '.[dev,sqlserver]'
 cp .env.example .env
 ```
 
@@ -247,6 +252,8 @@ Windows Task Scheduler configuration, or unattended production run is claimed he
 - Python 3.11+; the owner’s reported environment used Python 3.14
 - `httpx` for bounded, testable HTTP retrieval
 - `pyodbc` 5.3.0 and Microsoft SQL Server 2025 with ODBC Driver 18
+  - `psycopg` 3.x for the isolated PostgreSQL deployment path
+  - optional `boto3` for private S3-compatible raw-snapshot storage
 - `python-dotenv` for local configuration
 - FastAPI, Pydantic, and Uvicorn
 - pytest and Ruff
@@ -269,6 +276,8 @@ Windows Task Scheduler configuration, or unattended production run is claimed he
 | [`docs/MANUAL_RUNBOOK.md`](docs/MANUAL_RUNBOOK.md) | Manual setup, verification, recovery, and operation |
 | [`docs/SOURCE_NOTES.md`](docs/SOURCE_NOTES.md) | Provider observations and source caveats |
 | [`docs/TESTING.md`](docs/TESTING.md) | Test strategy and verification boundaries |
+| [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) | Compact current state, blockers, and next actions |
+| [`docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md`](docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md) | PostgreSQL compatibility, migration, and cloud decision |
 | [`data/raw/`](data/raw/) | Local immutable snapshots; ignored by Git |
 
 ## Known limitations and evidence boundaries
@@ -281,9 +290,11 @@ Windows Task Scheduler configuration, or unattended production run is claimed he
   records, not guaranteed real-time football state.
 - The current working tree includes later dashboard and synchronization changes whose
   lint, test, SQL, API, source, and browser checks remain NOT RUN in this handoff.
-- A scheduler-ready bounded command exists, but automatic import, end-to-end freshness
-  movement, unattended recovery, public hosting, and cloud deployment are not
-  established evidence.
+- A scheduler-ready bounded command and private S3-compatible snapshot adapter exist,
+  but automatic import, end-to-end freshness movement, unattended recovery, public
+  hosting, and cloud deployment are not established evidence. The checked-in workflow
+  remains explicitly gated until the owner verifies storage, roles, migration, and
+  replay behavior.
 - The dashboard does not provide guaranteed live scores, possession, xG, an official
   UEFA table, or a public multi-user authorization system.
 - Missing kickoff metadata and ambiguous source timezone metadata are retained as
