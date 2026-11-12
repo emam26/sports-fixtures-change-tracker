@@ -1,8 +1,8 @@
 # Testing strategy
 
-Status: all tests added or changed in the latest audit are **NOT RUN**. The last
-owner-supplied baseline before these changes was 85 passing non-SQL tests and one
-deselected SQL Server test; it does not verify the current working tree.
+Status: all tests added or changed in the latest audit are **NOT RUN**. Historical
+owner-supplied results included 166 passing tests with 3 failures and a later report
+of 169 offline tests; neither result verifies the current working tree.
 
 ## Offline default suite
 
@@ -66,6 +66,8 @@ covers:
   human-readable final-score labels;
 - repository SQL mapping against the actual deployed table/column names, dashboard
   aggregate/change queries, and note transaction behavior;
+- PostgreSQL mapping-row normalization, scoped role-grant text, safe schema identifiers,
+  immutable local snapshot retry behavior, and cloud snapshot metadata handling;
 - CLI configuration propagation for offline snapshot evaluation.
 
 HTTP tests use `httpx.MockTransport`. Import unit tests use an in-memory transactional
@@ -149,3 +151,10 @@ Keep these categories separate:
 
 A pass in one category does not imply another passed. Never infer benchmarks,
 database behavior, or live-source behavior from mocks alone.
+## Current offline and deployment-readiness coverage
+
+The current batch adds static CI-workflow coverage, PostgreSQL parity comparison tests, read-only preflight-report tests, and PostgreSQL lease-renewal tests. They are written but **NOT RUN**. The CI workflow intentionally excludes live SQL Server and Neon markers and never runs synchronization or cloud operations.
+
+The parity harness is read-only and compares all twelve migrated domain tables, row counts, stable keys, field differences, provider IDs, results/goals, change records, import runs, validation issues, quarantined conflict issues, checkpoints, snapshot hashes/timestamps, and derived foreign-key integrity. Datetimes are compared at UTC microsecond precision; SQL Server `datetime2(7)` sub-microsecond precision is not independently verified.
+
+Neon integration remains opt-in and requires both `RUN_NEON_INTEGRATION=yes` and `POSTGRES_TEST_CONFIRM_ISOLATED=yes` plus a dedicated test URL. It must not target the production database. Existing owner-supplied historical results remain evidence only; no new checks in this section are claimed as executed.

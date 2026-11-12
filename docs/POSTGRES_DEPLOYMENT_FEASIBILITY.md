@@ -207,11 +207,16 @@ requires owner-run parity and permission checks before production use:
 4. PostgreSQL checkpoint/matchday readers, a database lease, and injected store factories
    support unattended synchronization without changing local SQL Server behavior.
 5. `scripts/migrate_sqlserver_to_postgres.py` previews or applies only absent rows after
-   comparing existing target rows; mismatches stop the transaction.
+   comparing existing target rows; it normalizes Psycopg mapping rows, rejects unsafe
+   schema identifiers, detects target-only rows, reports target counts before apply, and
+   explicitly rolls back on failure.
 
 The raw-object archive now has a private S3-compatible adapter in
 `src/sports_tracker/storage.py` and a separate historical migration utility. The
-selected endpoint, bucket policy, credentials, retention, and replay behavior remain
+snapshot migration accepts the configured mapping-row format and explicitly rolls back
+database locator updates on failure. Object uploads are not part of the database
+transaction, so any orphan object remains safe but requires manual hash/reference review.
+The selected endpoint, bucket policy, credentials, retention, and replay behavior remain
 manual verification gates.
 
 Use a pooled Neon connection for bounded Render read traffic and a direct connection for
@@ -236,10 +241,15 @@ Use separate roles:
 | dashboard reader | SELECT on reviewed tables/views | any write or DDL privilege |
 | optional notes writer | only local-note CRUD if intentionally enabled | source fixture/result/change/checkpoint writes |
 
+`sql/postgresql/002_roles.sql` creates or normalizes NOLOGIN group roles and uses
+explicit `public.`-qualified table and identity-sequence grants. The API group receives
+only reviewed public SELECT tables; the synchronization group receives importer DML and
+INSERT/DELETE on `sync_leases` but no domain DELETE, notes, migration ledger, or DDL;
+the migrator is owner-operated and separate. It does not create LOGIN credentials.
 Neon states that SQL-created roles require selective grants, while Console/API-created
 roles are administrative unless an access level is selected. See [Neon roles](https://neon.com/docs/manage/roles).
-Test actual ON CONFLICT, identity-sequence, and RETURNING grants before deployment; a
-read-only database role does not replace FastAPI route restrictions.
+The owner must test actual ON CONFLICT, identity-sequence, and RETURNING grants before
+deployment; a read-only database role does not replace FastAPI route restrictions.
 
 ## Render, GitHub Actions, and Neon connectivity
 
@@ -375,3 +385,10 @@ to create resources or incur charges.
 - [PostgreSQL table expressions and LATERAL](https://www.postgresql.org/docs/current/queries-table-expressions.html)
 - [Psycopg 3 transaction management](https://www.psycopg.org/psycopg3/docs/basic/transactions.html)
 - [Psycopg 3 query parameters](https://www.psycopg.org/psycopg3/docs/basic/params.html)
+## Current implementation handoff — 2026-11-12
+
+The compatibility foundation now includes a read-only parity report (`scripts/verify_postgresql_parity.py`), a read-only deployment preflight (`scripts/preflight_postgresql.py`), and an offline PostgreSQL lease-renewal test. PostgreSQL synchronization requires `SELECT`, `INSERT`, and `DELETE` on `public.sync_leases`; domain-table delete access remains excluded. These additions are written but **NOT RUN**.
+
+Parity is deliberately evidence-oriented: `MATCH`, `MISMATCH`, `MISSING`, `ERROR`, and `NOT CHECKED` are distinct outcomes. It compares migrated tables and reports counts, stable keys, field differences, source/target-only rows, snapshot hashes, semantic result/change summaries, quarantined conflict issues, and derived foreign-key violations. Timestamp comparison is UTC at Python microsecond precision; SQL Server `datetime2(7)` sub-microsecond precision is not silently inferred.
+
+The deployment decision remains **CONDITIONAL GO** for a staged, isolated migration review. It is not authorization to connect a cloud job to production. First run the offline checks, then the read-only preflight and parity report, then review the dedicated-target Neon integration guard. A lease renewal fails closed when the owner row is lost; synchronization critical sections must remain shorter than the configured lease duration and must be operationally monitored.

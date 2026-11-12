@@ -257,10 +257,11 @@ The PostgreSQL schema is a separate reviewed artifact at
 `sql/postgresql/001_initial_schema.sql`; it uses `timestamptz`, boolean values,
 `RETURNING`, `LATERAL`, `LIMIT/OFFSET`, and an explicit checkpoint counter because
 SQL Server `datetime2`, `bit`, `OUTPUT/SCOPE_IDENTITY`, `OUTER APPLY`, pagination, and
-`rowversion` are not portable. The migration utility compares existing rows and stops
-on mismatches. Cloud synchronization writes and verifies private S3-compatible
-snapshot objects before import; missing credentials or an unavailable object store
-fail before checkpoint advancement. Local disk is staging only and is not treated as
+`rowversion` are not portable. The migration utility normalizes Psycopg mapping rows,
+compares complete source and target key sets, stops on mismatches or target-only rows,
+and rolls back its target transaction on failure. Cloud synchronization writes and verifies
+private S3-compatible snapshot objects before import. Missing credentials or an unavailable
+object store fail before checkpoint advancement. Local disk is staging only and is not treated as
 a Render/GitHub archive.
 
 ## Deployed schema assumptions
@@ -296,3 +297,6 @@ manual workflow; the application does not self-migrate the deployed database.
   performs the documented manual checks.
 - There is no public deployment, external authentication, worker queue, or
   multi-competition user experience.
+## Deployment-readiness additions — 2026-11-12
+
+The PostgreSQL path now has two read-only operational utilities: `scripts/preflight_postgresql.py` checks target identity and required tables, while `scripts/verify_postgresql_parity.py` compares the SQL Server source with PostgreSQL and reports explicit parity statuses. PostgreSQL synchronization leases renew in a daemon heartbeat while held and fail closed when the owner row is lost; the configured lease duration must exceed the longest critical operation. The FastAPI repository pool is closed through the application lifespan. These changes preserve the SQL Server implementation and are written but **NOT RUN**.

@@ -10,6 +10,12 @@ Actions descriptors are present. Snapshot storage has immutable local and privat
 S3-compatible adapters, with exact-byte verification before import. The workflow is
 explicitly gated until the owner verifies the endpoint, roles, migration, and replay.
 
+The latest static audit also tightened the cloud boundary: role grants are explicitly
+qualified to `public` and keep destructive domain-row privileges out of the API/sync
+roles; migration utilities handle Psycopg mapping rows, reject unsafe schema identifiers,
+detect target-only rows, report target counts before apply, and explicitly roll back on
+failure. Focused regression tests were added for these paths. They remain **NOT RUN**.
+
 Changed foundation files are listed in `docs/PROJECT_STATE.md` and the detailed SQL,
 timestamp, identity, permission, and free-tier trade-offs remain in
 `docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md`. No execution checks were run for this batch.
@@ -855,3 +861,8 @@ short-lived Azure control-plane authentication. No provider account, cloud
 resource, firewall, database, workflow, code, SQL, credential, or configuration was
 modified. No tests, Python, Git, SQL, HTTP, synchronization, deployment, or network
 commands were executed; all execution checks remain **NOT RUN**.
+## Current deployment-readiness handoff — 2026-11-12
+
+Implemented but **NOT RUN** in this batch: PostgreSQL sync-lease `SELECT` privilege correction; read-only parity reporting; read-only PostgreSQL preflight; offline lease-renewal, parity, preflight, lifecycle, and CI regression coverage; and an offline GitHub Actions quality workflow. Existing SQL Server schema/data, raw snapshots, credentials, and cloud resources were not modified.
+
+The safe next sequence is documented in `docs/MANUAL_RUNBOOK.md`: offline quality checks, PostgreSQL preflight, parity report, then opt-in isolated integration checks. Any `MISSING`, `MISMATCH`, `ERROR`, or non-isolated target is a stop condition. No migration, synchronization, deployment, or cloud test is claimed as executed.

@@ -4,7 +4,7 @@
 
 This repository is the Sports Fixtures & Change Tracker: Python, Microsoft SQL Server, FastAPI, and a plain HTML/CSS/JavaScript interface using real OpenLigaDB data.
 
-At the start of a session, read this file, docs/PROJECT_ROADMAP.md, and docs/BUILD_PLAN.md. Consult docs/MANUAL_RUNBOOK.md before proposing operational steps and docs/ARCHITECTURE.md when changing the design. Inventory the existing checkout before assuming what is implemented.
+At the start of a session, read this file, docs/PROJECT_STATE.md, and docs/BUILD_PLAN.md. Consult docs/MANUAL_RUNBOOK.md before proposing operational steps and docs/ARCHITECTURE.md when changing the design. Inventory the existing checkout before assuming what is implemented.
 
 The user's instructions take precedence over this document. Preserve compatible existing repository instructions and unrelated work.
 
@@ -47,7 +47,7 @@ Keep repeatable operational instructions in docs/MANUAL_RUNBOOK.md. Record signi
 
 Use Microsoft SQL Server for real integration checks; do not substitute SQLite for SQL Server behavior.
 
-Start with one Bundesliga matchday from 2025/26. Expand to full 2025/26 and 2026/27 data after the smaller import is proven.
+The current implemented scope is UEFA Champions League 2026/27 (`ucl`, season `2026`, league ID `4946`, Matchdays 1-8). Keep future competition and knockout support configurable, but do not claim source coverage that has not been retrieved and verified.
 
 Preserve source responses and provenance. Validate before changing current records. Repeated unchanged imports must not duplicate matches or create false business changes. Keep current records, observed changes, and successful checkpoints transactionally consistent.
 

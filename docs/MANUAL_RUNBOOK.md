@@ -824,6 +824,30 @@ Create separate provider-managed LOGIN credentials and grant membership to
 `sports_tracker_api`, `sports_tracker_sync`, and `sports_tracker_migrator`. Do not put
 those passwords in this repository or command history.
 
+The role script does not create LOGIN credentials. It creates or normalizes NOLOGIN
+group roles, qualifies grants to `public`, gives the dashboard role SELECT only on the
+reviewed public data tables, gives the synchronization role importer DML plus lease
+replacement on `sync_leases`, and gives neither API nor synchronization roles domain
+DELETE, notes writes, migration-ledger access, or DDL. Review the script before applying.
+After applying it, verify the effective privilege boundary as the database owner:
+
+```sql
+SELECT rolname, rolcanlogin
+FROM pg_roles
+WHERE rolname IN ('sports_tracker_api', 'sports_tracker_sync', 'sports_tracker_migrator')
+ORDER BY rolname;
+
+SELECT
+    has_table_privilege('sports_tracker_api', 'public.matches', 'SELECT') AS api_can_read_matches,
+    has_table_privilege('sports_tracker_api', 'public.matches', 'INSERT') AS api_can_insert_matches,
+    has_table_privilege('sports_tracker_sync', 'public.matches', 'INSERT') AS sync_can_insert_matches,
+    has_table_privilege('sports_tracker_sync', 'public.matches', 'DELETE') AS sync_can_delete_matches,
+    has_table_privilege('sports_tracker_sync', 'public.sync_leases', 'DELETE') AS sync_can_delete_leases;
+```
+
+Expected: all three groups report `rolcanlogin = false`; API INSERT is false; sync
+domain DELETE is false; and sync lease DELETE is true. Stop if any result differs.
+
 ### 13.3 Migration preview, reconciliation, and apply
 
 Where: WSL Bash, project directory. The local `.env` must contain SQL Server values;
@@ -836,17 +860,21 @@ python scripts/migrate_sqlserver_to_postgres.py
 ```
 
 Expected: `Migration previewed; source rows were not modified.` followed by source
-counts and hashes for every logical table. Stop if a row mismatch, foreign-key error,
-or unexpected count appears. Review the report before applying.
+counts, `target_before` counts, and hashes for every logical table. Stop if a row
+mismatch, target-only row, foreign-key error, or unexpected count appears. The utility
+normalizes Psycopg mapping rows, compares provider/identity rows before pagination or
+insertion, and explicitly rolls back the target transaction on failure. Review the
+report before applying.
 
 ```bash
 python scripts/migrate_sqlserver_to_postgres.py --apply
 ```
 
 Expected: `Migration applied; source rows were not modified.` and zero unexpected
-mismatches. The utility is restart-safe for identical rows and stops/rolls back on a
-different existing target row. It does not reconstruct change history from current
-fixtures. Raw response migration is a separate verified step below.
+mismatches. The utility is restart-safe for identical rows, stops/rolls back on a
+different existing target row or target-only row, and advances identity sequences only
+after all comparisons and inserts succeed. It does not reconstruct change history from
+current fixtures. Raw response migration is a separate verified step below.
 
 ### 13.4 Historical raw snapshot migration to private object storage
 
@@ -1015,3 +1043,30 @@ git push
 Stop before commit if `.env`, `data/raw/`, `data/runtime/`, database backups, unrelated
 work, or a secret appears in the staged set. Do not change Git identity, rewrite
 history, force-push, or delete unrelated modifications.
+## PostgreSQL deployment-readiness checks — owner execution only
+
+The following commands are prepared but **NOT RUN** by Codex. Execute them only against a dedicated PostgreSQL migration target. Set `POSTGRES_TEST_CONFIRM_ISOLATED=yes` only after independently confirming that the target is disposable or isolated; never point the mutating integration test at production. Keep secrets in the local environment and do not paste connection URLs into chat.
+
+From WSL at `/mnt/f/sports-fixtures-change-tracker`:
+
+```bash
+source .venv/bin/activate
+ruff check .
+ruff format --check .
+python -m pytest -q -m "not sqlserver and not neon"
+python scripts/preflight_postgresql.py
+python scripts/verify_postgresql_parity.py > parity-report.json
+```
+
+Expected outcomes: Ruff and offline pytest exit successfully; preflight prints `"status": "PASS"`; parity prints a deterministic JSON report. A parity status of `MISSING`, `MISMATCH`, or `ERROR` is a stop condition, not an import authorization. Review table counts, provider match IDs, scores/results/goals, changes, import runs, validation issues including quarantined conflicts, checkpoints, snapshot hashes/timestamps, and foreign-key violations before any migration or synchronization.
+
+For the opt-in Neon integration checks, first set a dedicated test URL and confirm isolation in the local shell, then run:
+
+```bash
+export RUN_NEON_INTEGRATION=yes
+export POSTGRES_TEST_CONFIRM_ISOLATED=yes
+export POSTGRES_TEST_DATABASE_URL='postgresql://<local-test-role>:<local-test-password>@<dedicated-host>/<dedicated-test-database>?sslmode=require'
+python -m pytest -m neon -q
+```
+
+The integration suite must skip when either opt-in flag or the dedicated URL is absent. Stop immediately if it reports a target identity that is not the dedicated test database. The sync role must have `SELECT`, `INSERT`, and `DELETE` on `public.sync_leases`; it must not have delete access to domain tables. The lease renewal path is designed to fail closed if ownership is lost. Keep each synchronization critical section below the configured lease duration and review workflow timeouts before production use; a failed or crashed job still requires a manual lease/state review.
