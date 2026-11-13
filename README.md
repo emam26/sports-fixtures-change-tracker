@@ -1,307 +1,189 @@
 # Sports Fixtures & Change Tracker
 
-![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
-![SQL Server](https://img.shields.io/badge/Database-SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/Cloud%20database-PostgreSQL-4169E1?logo=postgresql&logoColor=white)
-![OpenLigaDB](https://img.shields.io/badge/Source-OpenLigaDB-1F2937)
+**An auditable football fixture tracker with historical change detection, match analytics, and a public web dashboard.**
 
-A local-first football data pipeline that preserves OpenLigaDB observations, validates
-and imports them transactionally into Microsoft SQL Server, records field-level
-changes, and presents the resulting fixture history through a small FastAPI service
-and a framework-free browser dashboard.
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/Cloud%20DB-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Render](https://img.shields.io/badge/Hosted%20on-Render-111111)](https://render.com/)
+[![Source](https://img.shields.io/badge/Football%20data-OpenLigaDB-334155)](https://www.openligadb.de/)
 
-SQL Server remains the default local backend. A separate PostgreSQL/Neon backend,
-repeatable migration utility, Render descriptor, and GitHub Actions workflow are now
-implemented as deployment foundations; cloud execution remains owner-verified work.
+### [**Open the live dashboard**](https://sports-fixtures-change-tracker.onrender.com/) · [View source code](https://github.com/emam26/sports-fixtures-change-tracker) · [API reference](docs/API.md)
 
-The project is deliberately designed as an auditable data-engineering system rather
-than a live-score scraper. Raw source bytes, provenance, validation outcomes, current
-records, and observed changes remain distinguishable throughout the pipeline.
+> **Coverage:** UEFA Champions League **2026/2027 league phase** (matchdays 1–8). This project tracks stored source observations and changes; it is **not** an official UEFA service or a guaranteed real-time score feed.
 
-## What is currently tracked
+## Overview
 
-The implemented competition scope is the UEFA Champions League 2026/27 league phase:
+Sports Fixtures & Change Tracker collects football fixture data from OpenLigaDB, validates it before import, and preserves what changed between observations. It is built around a simple question: **not just what does a fixture say now, but what did the source report previously, and how did it change?**
 
-| Setting | Value |
+The project has two connected deployment paths:
+
+- **Local data pipeline:** immutable OpenLigaDB response snapshots, validation, transactional import, and historical change tracking in Microsoft SQL Server.
+- **Public, read-only dashboard:** FastAPI and a lightweight HTML/CSS/JavaScript frontend hosted on Render, reading from a migrated Neon PostgreSQL database.
+
+The cloud database contains a verified historical copy of the local data. **The deployed site does not run unattended OpenLigaDB synchronization.**
+
+## Explore the dashboard
+
+| Section | What you can explore |
 | --- | --- |
-| Provider | OpenLigaDB |
-| Shortcut | `ucl` |
-| Season | `2026` |
-| Expected league ID | `4946` |
-| League-phase matchdays | 1–8 |
-| Expected league-phase fixtures | 144 |
+| **Overview** | Competition context, fixture totals, completed and upcoming matches, stored goal-event counts, recorded changes, and upcoming fixtures. |
+| **Match Explorer** | Search and filter fixtures by team, matchday, or status, with server-side pagination and predictable chronological ordering. |
+| **Insights** | Read-only team, matchday, score, result, and goal-event summaries derived from stored records. |
+| **Change Intelligence** | Fixture and result history, field-level before/after values, and source provenance where available. |
 
-Provider and competition settings remain configurable for future source reviews, but
-this README makes no claim that another competition is implemented. Knockout-stage
-groups are a later scope expansion and require explicit source-shape review.
+**[Launch the dashboard →](https://sports-fixtures-change-tracker.onrender.com/)**
 
-## Verified evidence snapshot
+A *Last updated* timestamp represents the latest successful recorded synchronization, **not** a promise that the source was checked at that moment. An unfinished match is not automatically considered live, and missing scores are not displayed as `0–0`.
 
-The latest owner-supplied verification reports the following state in the dedicated
-local SQL Server database:
+## Data coverage and verification
 
-| Observation | Reported value | Interpretation |
-| --- | ---: | --- |
-| Unique league-phase fixtures | 144 | Fixture rows for the configured Matchdays 1–8 |
-| Finished fixtures | 72 | Fixtures with a validated final result |
-| Unfinished fixtures | 72 | Fixtures without a reported final result |
-| Stored result records | 143 | Result rows, not a count of matches or scores |
-| Stored goal-event records | 291 | Goal-event rows, not a claim of 291 goals scored |
-| Historical field-level changes | 936 | Persisted transitions in `match_changes` |
-| Teams exposed by the API | 36 | Returned by the verified local API observation |
-| Matchdays exposed by the API | 8 | Returned by the verified local API observation |
+The implemented competition is **Champions League 2026/2027**. The internal source season key is `2026` (`ucl`, OpenLigaDB league ID `4946`); the user-facing competition name does not append the key again.
 
-The same owner-supplied verification reports successful local SQL Server connectivity,
-successful dashboard API reads for summary, teams, and matchdays, and Match Explorer
-sorting checked against stored fixtures. These are evidence from the project owner,
-not results executed during this handoff. Older source notes may still describe the
-earlier Matchday 3/4 capture milestone; the table above records the newer reported
-database state without rewriting historical provenance.
+The following is an **owner-verified historical database snapshot**, not a continuously refreshed count or a live match result:
 
-An earlier automated verification supplied by the owner reported 129 tests passing,
-one SQL Server integration test deselected, Ruff lint passing, and Ruff formatting
-passing. Later implementation and dashboard edits remain **NOT RUN in this handoff**.
+| Measure | Recorded value |
+| --- | ---: |
+| League-phase fixtures | **144** |
+| Finished / unfinished fixtures | **72 / 72** |
+| Stored result rows | **143** |
+| Stored goal-event rows | **291** |
+| Historical field-level changes | **936** |
+| Teams represented | **36** |
+| League-phase matchdays | **8** |
 
-## Dashboard
+Result rows and goal-event rows are database records, not necessarily the number of finished matches or goals scored. In the cloud migration verification, **all 12 checked domain tables matched** between SQL Server and Neon PostgreSQL. The live `/api/competitions` endpoint was also observed responding with HTTP 200 after deployment configuration was corrected (November 13, 2026).
 
-The public local dashboard is intentionally focused on football information rather
-than operational internals. Its navigation is:
+## Engineering highlights
 
-1. **Overview** — competition context, fixture totals, finished/upcoming counts,
-   recorded goal-event totals, detected changes, upcoming fixtures, and a human-readable
-   **Last updated** value derived from the latest successful backend evidence.
-2. **Match Explorer** — server-side filtering and pagination by team, matchday, and
-   status. Completed fixtures default to newest known kickoff first; Upcoming uses the
-   nearest known kickoff first; All shows completed fixtures newest-first followed by
-   upcoming fixtures nearest-first. Missing kickoffs follow known kickoffs, and provider
-   match IDs provide deterministic tie-breaking.
-3. **Insights** — read-only summary, team, matchday, result, and goal-event analytics
-   calculated from valid stored data. These are analytical summaries, not official UEFA
-   standings or tiebreakers.
-4. **Change Intelligence** — understandable fixture, result, and goal-event history
-   grouped from the underlying field-level records, with before/after values and source
-   provenance where available.
+- **Immutable evidence:** each captured response is stored with request metadata, retrieval time, byte count, and SHA-256 hash; existing captures are never overwritten.
+- **Validation before import:** checks cover provider identity, match IDs, timestamps, teams, result types, and score relationships.
+- **Transactional database writes:** fixtures, scores, events, change history, checkpoints, and import-run evidence are handled together.
+- **Idempotent replay:** an unchanged source snapshot can be reprocessed without fabricating new changes.
+- **Field-level change tracking:** historical observations are distinguishable from the current fixture state.
+- **Read-only public access:** the Render deployment is designed for public browsing, not public database writes; data modifications and synchronization are separate gated workflows.
+- **Inspectable frontend:** no frontend framework is required—just HTML, CSS, and JavaScript served by FastAPI.
 
-The interface uses browser-local rendering for reliable timezone-aware kickoff values,
-keeps future scores absent/`NULL`, and does not treat an unfinished fixture as live.
-Source text is rendered safely in the browser. The application remains local-only and
-binds to loopback by default.
-
-## Engineering achievements
-
-- **Immutable source capture:** original response bytes are saved as `response.json`
-  beside metadata containing the request identity, retrieval time, byte count, and
-  SHA-256 hash. Existing snapshots are never overwritten.
-- **Explicit source contracts:** the importer checks the top-level JSON shape, provider
-  competition identity, match IDs, timestamps, team identity, result categories, and
-  score relationships before changing current data.
-- **Honest future state:** a match with no reported result keeps its score absent or
-  `NULL`; the importer never converts missing data into a fabricated 0–0.
-- **Transactional persistence:** fixture, result, goal, provenance, change-history,
-  validation, run-status, and checkpoint writes are coordinated through SQL Server
-  transaction boundaries. Failed imports retain useful failure provenance without
-  presenting partial current data as successful.
-- **Replay safety:** provider IDs and database uniqueness constraints make replaying an
-  unchanged snapshot idempotent. Unchanged replays do not create false business
-  changes.
-- **Conflict recovery:** the Matchday 2 conflict for provider match `87412` is handled
-  with strict validation by default. The explicitly enabled recovery path quarantines
-  conflicting non-final variants, preserves the raw snapshot, records the conflicting
-  result IDs and values, and retains only independently valid final-score data. It does
-  not choose an arbitrary halftime score.
-- **Safe application boundary:** FastAPI exposes parameterized, read-oriented queries;
-  note writes are separately gated; credentials and complete connection strings are
-  not returned by status endpoints or written to logs.
-- **Small, inspectable frontend:** the dashboard uses plain HTML, CSS, and JavaScript
-  so the rendering and security boundary remain easy to audit.
-
-## Architecture
+### Architecture
 
 ```mermaid
-flowchart LR
-    O[OpenLigaDB] --> R[Bounded HTTP retrieval]
-    R --> S[Immutable raw snapshot\nresponse.json + metadata.json]
-    S --> V[Typed parsing + source validation]
-    V --> I[Transactional SQL Server import]
-    I --> C[(Current fixtures\nresults + goals)]
-    I --> H[(Change history\n+ provenance)]
-    I --> P[(Import runs\nvalidation + checkpoints)]
-    C --> Q[Parameterized FastAPI queries]
-    H --> Q
-    P --> Q
-    C --> A[Read-only analytics]
-    A --> Q
-    Q --> D[Local browser dashboard]
+flowchart TD
+    A[OpenLigaDB] --> B[Bounded source retrieval]
+    B --> C[Immutable snapshots + SHA-256 metadata]
+    C --> D[Parsing + validation]
+    D --> E[Transactional import + change tracking]
+    E --> F[(SQL Server - local)]
+    F --> G[Verified historical migration]
+    G --> H[(Neon PostgreSQL)]
+    F --> I[Local FastAPI]
+    H --> J[Render FastAPI - read only]
+    I --> K[Browser dashboard]
+    J --> K
 ```
 
-The same snapshot can be evaluated or replayed offline without another provider
-request. The synchronizer is a bounded one-shot operation that can select due
-matchday work and discover configured provider groups; it is not an infinite FastAPI
-loop or a claim of unattended production operation.
+**Important:** the migration arrow represents a verified transfer, **not** continuous replication. Original raw snapshot files currently remain outside the public Render service.
 
-## Data quality case study: conflicting Matchday 2 results
+### Example: conflicting source results
 
-OpenLigaDB supplied two conflicting `HalfTime` rows for match `87412` (Viking vs FC
-Bayern München): result `129519` reported 2–0 and result `129520` reported 0–0. The
-`After90Minutes` row `129521` reported 3–3.
+One Matchday 2 snapshot included conflicting halftime results for provider match `87412` (Viking vs FC Bayern München): `2–0` and `0–0`, while the separately validated final result was `3–3`. The pipeline rejects ambiguous data by default. Its explicit recovery path can quarantine the conflicting non-final variants, retain the original evidence, and preserve independently validated final-score data without arbitrarily selecting a halftime score.
 
-The safe policy is:
+See [source notes](docs/SOURCE_NOTES.md), [architecture](docs/ARCHITECTURE.md), and the [manual runbook](docs/MANUAL_RUNBOOK.md) for the audit and recovery boundaries.
 
-- strict conflict rejection is the default;
-- recovery must be explicitly enabled and is limited to conflicting non-final result
-  categories;
-- both conflicting variants remain represented in validation/quarantine provenance;
-- the raw snapshot is immutable;
-- the final result is retained only after independent identity and score validation;
-- no halftime value is selected arbitrarily.
+## Technology stack
 
-The owner-reported recovery outcome is that the Matchday 2 import completed with the
-unambiguous 3–3 final result, while the stored result total reconciled to 143 and the
-936 historical changes were preserved. This outcome was not re-executed during this
-README-only handoff.
+| Area | Technologies |
+| --- | --- |
+| Data collection and validation | Python, `httpx`, Pydantic |
+| Local persistence | Microsoft SQL Server, `pyodbc`, ODBC Driver 18 |
+| Cloud persistence | PostgreSQL on Neon, `psycopg` 3 |
+| Backend | FastAPI, Uvicorn |
+| Frontend | HTML, CSS, vanilla JavaScript |
+| Hosting | Render web service |
+| Quality checks | pytest, Ruff, SQL parity and snapshot checks |
+| Football data provider | OpenLigaDB |
 
-## Reproducible local workflow
+## Run locally
 
-The commands below are for manual execution by the project owner. They are included
-for reproducibility and were **not run while preparing this README**.
-
-### Set up WSL
+This section covers the **local SQL Server workflow**; it assumes SQL Server, the required ODBC driver, and database configuration are available.
 
 ```bash
-cd /mnt/f/sports-fixtures-change-tracker
+git clone https://github.com/emam26/sports-fixtures-change-tracker.git
+cd sports-fixtures-change-tracker
+
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --editable '.[dev,sqlserver]'
 cp .env.example .env
 ```
 
-Keep real local settings only in `.env`. Never commit or paste that file, a password,
-or a complete connection string. The Windows host IP visible from WSL can change after
-a WSL or network restart, so reconfirm it before database operations.
+Configure `.env` with your **own local** settings. Never commit `.env`, database URLs, passwords, snapshots, or logs.
 
-### Offline validation first
-
-These steps do not require a new OpenLigaDB request. Replace the placeholder with an
-existing immutable snapshot directory.
-
-```bash
-cd /mnt/f/sports-fixtures-change-tracker
-source .venv/bin/activate
-ruff check .
-ruff format --check .
-python -m pytest -q -m "not sqlserver"
-python scripts/evaluate_snapshot.py "<SNAPSHOT_DIRECTORY>"
-python scripts/import_snapshot.py --snapshot "<SNAPSHOT_DIRECTORY>" --dry-run
-python scripts/report_season_coverage.py
-```
-
-The expected dry-run shape is a parsed match count and validation summary without SQL
-writes. A coverage report must distinguish an unavailable provider matchday from an
-import failure; it must not manufacture missing fixtures.
-
-### SQL Server and API verification
-
-Run the SQL Server integration test only when the dedicated local database and `.env`
-are ready:
-
-```bash
-python -m pytest tests/test_sqlserver_integration.py -m sqlserver -q
-```
-
-After database verification, start the local API on loopback:
+Once the database is configured, run the local dashboard:
 
 ```bash
 python scripts/run_api.py --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000/> and check the four sections, fixture filters, completed
-and upcoming ordering, missing-score rendering, Insights responses, Change Intelligence,
-and the Last updated value. A browser check is separate evidence from a passing unit
-test.
+Open **http://127.0.0.1:8000/**.
 
-### Source capture, discovery, and replay
-
-Inspect the provider’s available groups before a one-time backfill:
-
-```bash
-python scripts/discover_openligadb_season.py
-```
-
-Capture only groups reported by that read-only discovery review. Validate every
-immutable snapshot and import it separately:
+For existing snapshots, the project provides offline evaluation, dry-run import, and replay commands:
 
 ```bash
 python scripts/evaluate_snapshot.py "<SNAPSHOT_DIRECTORY>"
 python scripts/import_snapshot.py --snapshot "<SNAPSHOT_DIRECTORY>" --dry-run
-python scripts/import_snapshot.py --snapshot "<SNAPSHOT_DIRECTORY>"
 ```
 
-For future bounded synchronization, the documented one-shot entry point is:
+Read [the manual runbook](docs/MANUAL_RUNBOOK.md) before running a real import or synchronization; those operations can write to the database and request fresh provider data.
+
+### Validation
 
 ```bash
-python scripts/sync_openligadb.py --discover
+ruff check .
+ruff format --check .
+python -m pytest -q -m "not sqlserver and not neon"
 ```
 
-The last command makes real source requests and SQL writes. OpenLigaDB documents a
-60-requests-per-minute limit; aggressive polling is prohibited. No cloud deployment,
-Windows Task Scheduler configuration, or unattended production run is claimed here.
+The latest owner-reported local verification included **209 passing tests, 2 deselected**, and a Starlette deprecation warning. This is historical verification, not an automatically updating CI badge or a claim that tests were rerun for this README edit.
 
-## Technology stack
-
-- Python 3.11+; the owner’s reported environment used Python 3.14
-- `httpx` for bounded, testable HTTP retrieval
-- `pyodbc` 5.3.0 and Microsoft SQL Server 2025 with ODBC Driver 18
-  - `psycopg` 3.x for the isolated PostgreSQL deployment path
-  - optional `boto3` for private S3-compatible raw-snapshot storage
-- `python-dotenv` for local configuration
-- FastAPI, Pydantic, and Uvicorn
-- pytest and Ruff
-- Plain HTML, CSS, and JavaScript
-
-## Repository guide
+## Repository map
 
 | Path | Purpose |
 | --- | --- |
-| [`src/sports_tracker/`](src/sports_tracker/) | Configuration, source client, snapshots, ingestion, synchronization, API, and analytics |
-| [`src/sports_tracker/web/`](src/sports_tracker/web/) | Dashboard HTML, JavaScript, and CSS |
-| [`scripts/`](scripts/) | Manual capture, evaluation, import, discovery, synchronization, reporting, and API entry points |
-| [`sql/`](sql/) | SQL Server schema and manual recovery scripts |
-| [`tests/`](tests/) | Offline unit/API tests and opt-in SQL Server integration tests |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design boundaries and data mappings |
-| [`docs/API.md`](docs/API.md) | API contracts and endpoint behavior |
-| [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) | Staged implementation status and evidence log |
-| [`docs/DEPLOYMENT_LOCAL.md`](docs/DEPLOYMENT_LOCAL.md) | Local scheduling and deployment notes |
-| [`docs/EVALUATION.md`](docs/EVALUATION.md) | Evaluation plan and operational metrics |
-| [`docs/MANUAL_RUNBOOK.md`](docs/MANUAL_RUNBOOK.md) | Manual setup, verification, recovery, and operation |
-| [`docs/SOURCE_NOTES.md`](docs/SOURCE_NOTES.md) | Provider observations and source caveats |
-| [`docs/TESTING.md`](docs/TESTING.md) | Test strategy and verification boundaries |
-| [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md) | Compact current state, blockers, and next actions |
-| [`docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md`](docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md) | PostgreSQL compatibility, migration, and cloud decision |
-| [`data/raw/`](data/raw/) | Local immutable snapshots; ignored by Git |
+| [`src/sports_tracker/`](src/sports_tracker/) | Source client, snapshot management, validation, import, persistence, API, analytics, and synchronization |
+| [`src/sports_tracker/web/`](src/sports_tracker/web/) | Browser interface and assets |
+| [`scripts/`](scripts/) | Manual capture, migration, parity, import, replay, diagnostics, and API entry points |
+| [`sql/`](sql/) | SQL Server schema and recovery scripts |
+| [`tests/`](tests/) | Automated checks and opt-in integration tests |
+| [`docs/`](docs/) | System design, deployment, operations, evidence, and testing documentation |
+| `data/raw/` | Local immutable source snapshots (ignored by Git) |
 
-## Known limitations and evidence boundaries
+### Documentation
 
-- OpenLigaDB is a community source, not an official UEFA data feed. Provider
-  availability, labels, timestamps, and result completeness must be checked per
-  snapshot.
-- The 144/72/72/143/291/936 values above are an owner-reported verification snapshot,
-  not a live query performed for this README. They describe stored rows and change
-  records, not guaranteed real-time football state.
-- The current working tree includes later dashboard and synchronization changes whose
-  lint, test, SQL, API, source, and browser checks remain NOT RUN in this handoff.
-- A scheduler-ready bounded command and private S3-compatible snapshot adapter exist,
-  but automatic import, end-to-end freshness movement, unattended recovery, public
-  hosting, and cloud deployment are not established evidence. The checked-in workflow
-  remains explicitly gated until the owner verifies storage, roles, migration, and
-  replay behavior.
-- The dashboard does not provide guaranteed live scores, possession, xG, an official
-  UEFA table, or a public multi-user authorization system.
-- Missing kickoff metadata and ambiguous source timezone metadata are retained as
-  uncertainty; the application does not invent chronology.
-- Raw snapshots, `.env`, database backups, logs, and local virtual environments must
-  remain local and ignored. No password or secret belongs in this repository.
+| Guide | Start here for… |
+| --- | --- |
+| [Architecture](docs/ARCHITECTURE.md) | Components, data boundaries, and persistence design |
+| [API](docs/API.md) | Dashboard and service endpoint contracts |
+| [Project state](docs/PROJECT_STATE.md) | Current milestones, decisions, and outstanding tasks |
+| [Build plan](docs/BUILD_PLAN.md) | Implementation phases and evidence ledger |
+| [Manual runbook](docs/MANUAL_RUNBOOK.md) | Safe operation, troubleshooting, imports, and recovery |
+| [Testing](docs/TESTING.md) | Unit, integration, and verification strategy |
+| [Deployment feasibility](docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md) | PostgreSQL/Neon migration design and constraints |
+| [Source notes](docs/SOURCE_NOTES.md) | OpenLigaDB observations and provider caveats |
 
-For the full operational caveats and the evidence ledger, start with
-[`docs/MANUAL_RUNBOOK.md`](docs/MANUAL_RUNBOOK.md) and
-[`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md).
+## Deployment status and limitations
+
+| Component | Status |
+| --- | --- |
+| Local SQL Server data pipeline | Implemented and owner-verified |
+| Historical SQL Server → Neon migration | Verified (12/12 checked tables matched) |
+| Render-hosted public dashboard | **Deployed**; database API connectivity verified |
+| Public API write access | Disabled by deployment design |
+| Automatic cloud source synchronization | **Not enabled** |
+| Durable cloud storage for raw source snapshots | **Not yet configured** |
+| Knockout-stage tracking and other competitions | Outside verified current scope |
+
+Additional boundaries: OpenLigaDB is a community-maintained source; data may be incomplete or delayed. The dashboard does not claim official UEFA standings, xG, possession, guaranteed live scores, or uninterrupted availability. Render's free service may have cold-start delays after inactivity.
+
+---
+
+**[Visit the live dashboard](https://sports-fixtures-change-tracker.onrender.com/)** · **[Browse the code](https://github.com/emam26/sports-fixtures-change-tracker)**
