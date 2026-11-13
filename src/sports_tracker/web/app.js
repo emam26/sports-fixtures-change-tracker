@@ -743,11 +743,6 @@ function renderLastUpdated(timestamp, fallback = null) {
   ui.lastUpdated.replaceChildren(
     element("span", { className: "last-updated-label", text: "Last updated" }),
     element("strong", { text: timestamp ? formatDate(timestamp) : fallback || "Not recorded" }),
-    element("span", {
-      text: timestamp
-        ? "Based on the latest successful synchronization recorded by the local database."
-        : "No completed synchronization is recorded for this selection.",
-    }),
     element("small", { className: "freshness-check", text: state.freshnessCheckText }),
   );
 }
@@ -772,7 +767,7 @@ async function loadOverview() {
     );
     if (requestId !== state.overviewRequestId) return;
     renderSummary(summary);
-    setStatus(ui.overviewStatus, "Overview updated from current database records.", "ok");
+    setStatus(ui.overviewStatus, "", "ok");
   } catch (error) {
     if (requestId !== state.overviewRequestId) return;
     [ui.metricTotal, ui.metricFinished, ui.metricUpcoming, ui.metricGoals, ui.metricChanges].forEach(
@@ -1787,7 +1782,7 @@ async function loadFreshness({ refreshOnChange = true } = {}) {
     state.freshnessInitialized = true;
     updateLastUpdatedTimestamp(freshness.latest_successful_sync_at_utc);
     state.freshnessRetryDelayMs = FRESHNESS_POLL_INTERVAL_MS;
-    renderFreshnessCheck(`Checked for updates ${formatDate(new Date())}.`);
+    renderFreshnessCheck("");
     if (
       refreshOnChange &&
       revisionChanged
