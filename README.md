@@ -10,7 +10,7 @@
 
 ### [**Open the live dashboard**](https://sports-fixtures-change-tracker.onrender.com/) 
 
-> **Coverage:** UEFA Champions League **2026/2027 league phase** (matchdays 1–8). This project tracks stored source observations and changes; it is **not** an official UEFA service or a guaranteed real-time score feed.
+> **Coverage:** UEFA Champions League **2026/2027 league phase** (matchdays 1–8). This project tracks stored source observations and changes
 
 ## Overview
 
