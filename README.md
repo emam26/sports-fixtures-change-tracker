@@ -32,7 +32,6 @@ The cloud database contains a verified historical copy of the local data. **The 
 | **Insights** | Read-only team, matchday, score, result, and goal-event summaries derived from stored records. |
 | **Change Intelligence** | Fixture and result history, field-level before/after values, and source provenance where available. |
 
-**[Launch the dashboard →](https://sports-fixtures-change-tracker.onrender.com/)**
 
 A *Last updated* timestamp represents the latest successful recorded synchronization, **not** a promise that the source was checked at that moment. An unfinished match is not automatically considered live, and missing scores are not displayed as `0–0`.
 
