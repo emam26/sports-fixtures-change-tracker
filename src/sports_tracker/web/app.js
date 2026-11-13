@@ -655,7 +655,7 @@ async function loadServiceStatus() {
 function renderCompetitionContext() {
   const competition = selectedCompetition();
   if (competition) {
-    setText(ui.competitionContext, `${competition.name} / ${competition.season}`);
+    setText(ui.competitionContext, competition.name);
     return;
   }
   setText(ui.competitionContext, "All loaded competition seasons");
@@ -669,7 +669,7 @@ async function loadCompetitions() {
     state.competitions = competitions;
     ui.competitionSelect.replaceChildren(new Option("All loaded competition seasons", ""));
     competitions.forEach((competition) => {
-      const label = `${competition.name} / ${competition.season}`;
+      const label = competition.name;
       ui.competitionSelect.append(new Option(label, String(competition.competition_season_id)));
     });
     const availableValues = new Set([...ui.competitionSelect.options].map((option) => option.value));
