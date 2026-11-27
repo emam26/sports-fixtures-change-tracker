@@ -5,6 +5,7 @@ from contextlib import closing
 
 import pytest
 
+from sports_tracker.api.repository import SQLServerRepository
 from sports_tracker.runtime import open_sql_server_connection
 
 pytestmark = pytest.mark.sqlserver
@@ -41,3 +42,8 @@ def test_deployed_schema_has_expected_twelve_tables() -> None:
         actual = {row[0] for row in cursor.fetchall()}
 
     assert actual == expected
+
+    fixtures, total = SQLServerRepository(open_sql_server_connection).matches(
+        competition_season_id=None, matchday=None, finished=None, search=None, limit=50, offset=0
+    )
+    assert len(fixtures) == min(total, 50)

@@ -196,48 +196,38 @@ class SQLServerRepository:
         """
         total = self._read(f"SELECT COUNT_BIG(*) AS total {base}", tuple(params))[0]
         if sort == "explorer" and finished is None:
-            items_sql = f"""
-                SELECT match_id,
-                       provider_match_id,
-                       matchday_number,
-                       stage_name,
-                       kickoff_utc,
-                       is_finished,
-                       home_team,
-                       away_team,
-                       home_score,
-                       away_score,
-                       last_source_update_utc
-                {base}
-                ORDER BY CASE WHEN m.source_match_is_finished = 1 THEN 0 ELSE 1 END,
-                         CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
-                         CASE WHEN m.source_match_is_finished = 1 THEN m.kickoff_utc END DESC,
-                         CASE WHEN m.source_match_is_finished = 0 THEN m.kickoff_utc END,
-                         CASE WHEN m.source_match_is_finished = 1 THEN m.provider_match_id END DESC,
-                         CASE WHEN m.source_match_is_finished = 0 THEN m.provider_match_id END
-                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
+            order = """
+                CASE WHEN m.source_match_is_finished = 1 THEN 0 ELSE 1 END,
+                CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                CASE WHEN m.source_match_is_finished = 1 THEN m.kickoff_utc END DESC,
+                CASE WHEN m.source_match_is_finished = 0 THEN m.kickoff_utc END,
+                CASE WHEN m.source_match_is_finished = 1 THEN m.provider_match_id END DESC,
+                CASE WHEN m.source_match_is_finished = 0 THEN m.provider_match_id END
             """
         else:
             descending = sort == "kickoff-desc" or (sort == "explorer" and finished is True)
             direction = "DESC" if descending else "ASC"
-            items_sql = f"""
-                SELECT m.match_id,
-                       m.provider_match_id,
-                       m.matchday_number,
-                       m.competition_stage AS stage_name,
-                       m.kickoff_utc,
-                       m.source_match_is_finished AS is_finished,
-                       ht.team_name AS home_team,
-                       at.team_name AS away_team,
-                       final_result.home_score,
-                       final_result.away_score,
-                       m.source_last_update_utc AS last_source_update_utc
-                {base}
-                ORDER BY CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
-                         m.kickoff_utc {direction},
-                         m.provider_match_id {direction}
-                OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
+            order = f"""
+                CASE WHEN m.kickoff_utc IS NULL THEN 1 ELSE 0 END,
+                m.kickoff_utc {direction},
+                m.provider_match_id {direction}
             """
+        items_sql = f"""
+            SELECT m.match_id,
+                   m.provider_match_id,
+                   m.matchday_number,
+                   m.competition_stage AS stage_name,
+                   m.kickoff_utc,
+                   m.source_match_is_finished AS is_finished,
+                   ht.team_name AS home_team,
+                   at.team_name AS away_team,
+                   final_result.home_score,
+                   final_result.away_score,
+                   m.source_last_update_utc AS last_source_update_utc
+            {base}
+            ORDER BY {order.strip()}
+            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
+        """
         items = self._read(items_sql, (*params, offset, limit))
         return items, int(total["total"])
 
