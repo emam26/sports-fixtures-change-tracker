@@ -227,7 +227,11 @@ def test_synchronization_workflow_is_explicitly_gated() -> None:
 
     assert "inputs.activate" in workflow
     assert "vars.ENABLE_SYNC == 'true'" in workflow
-    assert "RAW_SNAPSHOT_STORAGE: object" in workflow
+    assert "RAW_SNAPSHOT_STORAGE: postgresql" in workflow
+    assert "OBJECT_STORAGE_" not in workflow
+    assert "secrets.POSTGRES_SYNC_DATABASE_URL" in workflow
+    assert "github.ref_name == github.event.repository.default_branch" in workflow
+    assert "default: false" in workflow
 
 
 def test_postgresql_role_script_has_no_password_literals_or_domain_delete_grant() -> None:
