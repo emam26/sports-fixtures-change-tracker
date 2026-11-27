@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable
-from contextlib import closing
+from contextlib import AbstractContextManager, closing
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,17 +32,24 @@ def _postgres_rows(cursor: Any) -> list[dict[str, Any]]:
 class PostgreSQLRepository:
     """Small PostgreSQL query layer with parameterized SQL and owned connections."""
 
-    def __init__(self, connection_factory: Callable[[], Any], schema: str = "public") -> None:
+    def __init__(
+        self,
+        connection_factory: Callable[[], Any],
+        schema: str = "public",
+        *,
+        read_connection: Callable[[], AbstractContextManager[Any]] | None = None,
+    ) -> None:
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema) is None:
             raise ValueError("PostgreSQL schema must be a simple SQL identifier")
         self._connection_factory = connection_factory
         self._schema = schema
+        self._read_connection = read_connection or (lambda: closing(connection_factory()))
 
     def _table(self, name: str) -> str:
         return f'"{self._schema}"."{name}"'
 
     def _read(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        with closing(self._connection_factory()) as connection:
+        with self._read_connection() as connection:
             cursor = connection.cursor()
             cursor.execute(sql, params)
             return _postgres_rows(cursor)

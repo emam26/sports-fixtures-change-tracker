@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sports_tracker.config import (
     ConfigurationError,
@@ -18,6 +19,7 @@ from sports_tracker.openligadb import (
     RetryPolicy,
     SeasonDiscovery,
 )
+from sports_tracker.pages_export import PagesExportError, export_pages, load_pages_snapshot
 from sports_tracker.postgres_ingestion import PostgreSQLImportStore
 from sports_tracker.postgres_synchronization import (
     PostgreSQLCheckpointReader,
@@ -55,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--include-post-league-phase",
         action="store_true",
         help="Include discovered groups outside configured league-phase matchdays.",
+    )
+    parser.add_argument(
+        "--pages-output",
+        type=Path,
+        help="Build a Pages artifact after all configured league-phase matchdays succeed.",
     )
     return parser
 
@@ -168,6 +175,12 @@ def main() -> int:
         if source.raw_snapshot_storage == "object":
             load_object_storage_settings()
         backend = load_database_backend()
+        if args.pages_output is not None and (
+            backend != "postgresql" or source.raw_snapshot_storage != "object"
+        ):
+            raise ConfigurationError(
+                "Pages publication requires PostgreSQL and private object storage"
+            )
         if backend == "postgresql":
             connection_factory = open_postgresql_connection
             matchday_reader = PostgreSQLMatchdayReader
@@ -198,6 +211,10 @@ def main() -> int:
                 connection_factory=connection_factory,
                 matchday_reader_factory=matchday_reader,
             )
+            if args.pages_output is not None and set(matchdays) != set(
+                source.expected_league_phase_matchdays
+            ):
+                raise ConfigurationError("Pages publication requires all configured matchdays")
             if discovery is not None:
                 logger.write(
                     "sync_matchdays_discovered",
@@ -220,13 +237,30 @@ def main() -> int:
                 logger=logger,
                 checkpoint_reader_factory=checkpoint_reader,
                 store_factory=store_factory,
+                **(
+                    {"snapshot_loader": load_pages_snapshot}
+                    if args.pages_output is not None
+                    else {}
+                ),
             )
             logger.write("sync_run_started", matchdays=matchdays)
             outcomes = coordinator.synchronize(matchdays)
+            if args.pages_output is not None and not any(
+                outcome.status == "failed" for outcome in outcomes
+            ):
+                if tuple(outcome.matchday for outcome in outcomes) != matchdays or any(
+                    outcome.status not in {"imported", "skipped"} for outcome in outcomes
+                ):
+                    raise PagesExportError("Synchronization did not complete the full Pages scope.")
+                synchronized_at = datetime.now(UTC)
+                sync_lock.ensure_held()
+                export_pages(args.pages_output, connection_factory, source, synchronized_at)
+                sync_lock.ensure_held()
+                print("Public dashboard reconciled and built for GitHub Pages.")
     except SyncAlreadyRunningError as exc:
         print(f"Synchronization not started: {exc}")
         return 3
-    except (ConfigurationError, OpenLigaDBError, SyncError, OSError) as exc:
+    except (ConfigurationError, OpenLigaDBError, PagesExportError, SyncError, OSError) as exc:
         print(f"Synchronization failed safely: {exc}")
         return 1
     except Exception as exc:

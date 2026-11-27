@@ -1,4 +1,4 @@
-"""Offline checks for deployment files; all cloud execution remains manual."""
+"""Offline checks for deployment files; without contacting cloud services."""
 
 from pathlib import Path
 
@@ -17,10 +17,16 @@ def test_render_configuration_is_public_readonly_and_does_not_contain_credential
 
 def test_scheduled_workflow_is_concurrent_safe_and_object_storage_fail_closed() -> None:
     text = (ROOT / ".github" / "workflows" / "synchronize.yml").read_text(encoding="utf-8")
-    assert 'cron: "17,47 * * * *"' in text
+    assert 'cron: "17 2 * * *"' in text
     assert "cancel-in-progress: false" in text
     assert "workflow_dispatch" in text
     assert "RAW_SNAPSHOT_STORAGE: object" in text
+    assert "needs: synchronize" in text
+    assert "uses: actions/upload-pages-artifact@" in text
+    assert "uses: actions/deploy-pages@" in text
+    assert "secrets.POSTGRES_SYNC_DATABASE_URL" in text
+    assert "github.ref_name == github.event.repository.default_branch" in text
+    assert "git push" not in text
 
 
 def test_postgresql_schema_contains_the_logical_tables_and_migration_ledger() -> None:

@@ -580,7 +580,120 @@ function apiPath(path, parameters = {}) {
   return query ? `${path}?${query}` : path;
 }
 
+const pagesDataUrl = document.querySelector('meta[name="dashboard-data"]')?.content;
+let publishedData = null;
+let publishedDataRequest = null;
+
+async function fetchPublishedData() {
+  if (!publishedDataRequest) {
+    publishedDataRequest = (async () => {
+      const response = await fetch(pagesDataUrl, {
+        cache: "no-cache",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) throw new ApiRequestError("Dashboard data is unavailable.", response.status);
+      const data = await response.json();
+      if (
+        data.schemaVersion !== 1 || !/^[0-9a-f]{64}$/.test(data.revision)
+        || !Number.isFinite(Date.parse(data.synchronizedAt))
+        || data.competitions?.length !== 1 || !data.scope?.summary
+        || !Array.isArray(data.scope?.matches) || !Array.isArray(data.scope?.changes)
+        || !data.scope?.insights || !data.matchDetails || !data.matchHistory
+      ) {
+        throw new ApiRequestError("Dashboard data has an unsupported format.");
+      }
+      return data;
+    })().finally(() => { publishedDataRequest = null; });
+  }
+  return publishedDataRequest;
+}
+
+function publishedPage(items, query) {
+  const limit = Number(query.get("limit") ?? 50);
+  const offset = Number(query.get("offset") ?? 0);
+  return { items: items.slice(offset, offset + limit), total: items.length, limit, offset };
+}
+
+function comparePublishedFixtures(left, right, sort) {
+  if (sort === "explorer" && left.is_finished !== right.is_finished) {
+    return Number(right.is_finished) - Number(left.is_finished);
+  }
+  if (Boolean(left.kickoff_utc) !== Boolean(right.kickoff_utc)) {
+    return left.kickoff_utc ? -1 : 1;
+  }
+  const direction = sort === "kickoff-desc" || (sort === "explorer" && left.is_finished) ? -1 : 1;
+  const kickoffDifference = left.kickoff_utc
+    ? Date.parse(left.kickoff_utc) - Date.parse(right.kickoff_utc)
+    : 0;
+  return direction * (kickoffDifference || left.provider_match_id - right.provider_match_id);
+}
+
+async function requestPublishedData(path) {
+  const data = publishedData ?? await fetchPublishedData();
+  const { pathname, searchParams } = new URL(path, window.location.origin);
+  const { scope, competitions } = data;
+  const season = searchParams.get("competition_season_id");
+  const competitionId = competitions[0].competition_season_id;
+  if (season !== null && Number(season) !== competitionId) {
+    throw new ApiRequestError("Competition unavailable in this publication.", 404);
+  }
+  switch (pathname) {
+    case "/api/status":
+      return { status: "ok", local_only: false, note_writes_enabled: false };
+    case "/api/competitions":
+      return competitions;
+    case "/api/matchdays":
+      return scope.matchdays;
+    case "/api/dashboard-summary":
+      return { ...scope.summary, latest_successful_sync_at_utc: data.synchronizedAt };
+    case "/api/freshness":
+      return { revision: data.revision, latest_successful_sync_at_utc: data.synchronizedAt };
+    case "/api/matches": {
+      const matchday = searchParams.get("matchday");
+      const finished = searchParams.get("finished");
+      const search = searchParams.get("search")?.trim().toLowerCase();
+      const sort = searchParams.get("sort") ?? "explorer";
+      const matches = scope.matches.filter((match) => (
+        (matchday === null || match.matchday_number === Number(matchday))
+        && (finished === null || match.is_finished === (finished === "true"))
+        && (!search || [match.home_team, match.away_team]
+          .some((team) => team.toLowerCase().includes(search)))
+      ));
+      matches.sort((left, right) => comparePublishedFixtures(left, right, sort));
+      return publishedPage(matches, searchParams);
+    }
+    case "/api/match-changes":
+      return publishedPage(scope.changes, searchParams);
+    case "/api/insights/summary":
+      return {
+        ...scope.insights.summary,
+        competition_season_id: season === null ? null : competitionId,
+        latest_successful_sync_at_utc: data.synchronizedAt,
+      };
+    case "/api/insights/teams":
+      return scope.insights.teams;
+    case "/api/insights/matchdays":
+      return scope.insights.matchdays;
+  }
+
+  const detail = pathname.match(/^\/api\/matches\/([1-9][0-9]*)(\/changes)?$/);
+  if (detail && Object.hasOwn(data.matchDetails, detail[1])) {
+    return detail[2] ? data.matchHistory[detail[1]] : data.matchDetails[detail[1]];
+  }
+  const team = pathname.match(/^\/api\/insights\/teams\/([1-9][0-9]*)$/);
+  if (team && Object.hasOwn(scope.insights.teamDetails, team[1])) {
+    return scope.insights.teamDetails[team[1]];
+  }
+  throw new ApiRequestError("Dashboard record is unavailable.", 404);
+}
+
 async function request(path, options = {}) {
+  if (pagesDataUrl) {
+    if (options.method && options.method !== "GET") {
+      throw new ApiRequestError("The public dashboard is read-only.", 405);
+    }
+    return requestPublishedData(path);
+  }
   const headers = { Accept: "application/json", ...options.headers };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
@@ -640,7 +753,8 @@ function sourcePill(match) {
 
 function describeRequestFailure(subject, error) {
   const suffix = error instanceof ApiRequestError && error.status ? ` (HTTP ${error.status})` : "";
-  return `${subject} could not be loaded${suffix}. Check the local dashboard service and try again.`;
+  const nextStep = pagesDataUrl ? "Refresh the published dashboard and try again." : "Check the local dashboard service and try again.";
+  return `${subject} could not be loaded${suffix}. ${nextStep}`;
 }
 
 async function loadServiceStatus() {
@@ -741,10 +855,11 @@ function renderSummary(summary) {
 function renderLastUpdated(timestamp, fallback = null) {
   if (!ui.lastUpdated) return;
   ui.lastUpdated.replaceChildren(
-    element("span", { className: "last-updated-label", text: "Last updated" }),
-    element("strong", { text: timestamp ? formatDate(timestamp) : fallback || "Not recorded" }),
+    element("span", { className: "last-updated-label", text: pagesDataUrl ? "Last successful sync" : "Last updated" }),
+    element("strong", { text: fallback || "Not recorded" }),
     element("small", { className: "freshness-check", text: state.freshnessCheckText }),
   );
+  if (timestamp) updateLastUpdatedTimestamp(timestamp);
 }
 
 function renderFreshnessCheck(text) {
@@ -755,7 +870,15 @@ function renderFreshnessCheck(text) {
 
 function updateLastUpdatedTimestamp(timestamp) {
   const node = ui.lastUpdated?.querySelector("strong");
-  if (node) node.textContent = timestamp ? formatDate(timestamp) : "Not recorded";
+  if (!node) return;
+  if (!timestamp) {
+    node.textContent = "Not recorded";
+    return;
+  }
+  node.replaceChildren(element("time", {
+    text: formatDate(timestamp),
+    attributes: { datetime: timestamp },
+  }));
 }
 
 async function loadOverview() {
@@ -775,7 +898,7 @@ async function loadOverview() {
     );
     setText(ui.metricChangesDetail, "Affected fixtures unavailable");
     renderLastUpdated(null, "Unavailable");
-    renderFreshnessCheck("Update check paused until the local dashboard service responds.");
+    renderFreshnessCheck("Update check paused until dashboard data is available.");
     const message = describeRequestFailure("Overview metrics", error);
     setStatus(ui.overviewStatus, message, "error");
     showAppAlert(message);
@@ -1156,7 +1279,7 @@ async function loadInsights() {
     const message =
       failures.length === results.length
         ? describeRequestFailure("Insights", failures[0].reason)
-        : "Some Insights data could not be loaded. Check the local dashboard service and try again.";
+        : "Some Insights data could not be loaded. Refresh the dashboard and try again.";
     setStatus(ui.insightsStatus, message, "error");
     showAppAlert(message);
     return;
@@ -1288,7 +1411,7 @@ function renderFixturePage(page) {
     renderListState(
       ui.fixtureList,
       "No fixtures match these filters",
-      "Change the filters or import a preserved source snapshot first.",
+      pagesDataUrl ? "Try a different matchday, status or team." : "Change the filters or import a preserved source snapshot first.",
     );
   } else {
     matches.forEach((match) => ui.fixtureList.append(fixtureCard(match)));
@@ -1313,7 +1436,7 @@ async function loadFixtures() {
   state.fixturesLoading = true;
   setBusy(ui.fixtureList, true);
   setStatus(ui.fixtureStatus, "Loading fixtures...", "loading");
-  ui.fixtureList.replaceChildren(contentState("Loading fixtures", "Querying the local fixture API.", "loading"));
+  ui.fixtureList.replaceChildren(contentState("Loading fixtures", "Retrieving fixture records.", "loading"));
   const parameters = {
     competition_season_id: selectedCompetitionId(),
     matchday: ui.matchdaySelect?.value || null,
@@ -1687,15 +1810,17 @@ function buildMatchDetail(match, changes, notes, issues) {
   } else {
     provenance.append(detailChangeSection(changes));
   }
-  const noteStatus = createNoteStatus();
-  if (issues.notes) {
-    provenance.append(detailList("Local notes", [], () => element("li"), issues.notes));
-  } else {
-    provenance.append(
-      detailList("Local notes", notes, (note) => noteRow(note, match.match_id, noteStatus), "No local notes."),
-    );
+  if (!pagesDataUrl) {
+    const noteStatus = createNoteStatus();
+    if (issues.notes) {
+      provenance.append(detailList("Local notes", [], () => element("li"), issues.notes));
+    } else {
+      provenance.append(
+        detailList("Local notes", notes, (note) => noteRow(note, match.match_id, noteStatus), "No local notes."),
+      );
+    }
+    provenance.append(noteEditor(match.match_id, noteStatus), noteStatus);
   }
-  provenance.append(noteEditor(match.match_id, noteStatus), noteStatus);
   columns.append(sporting, provenance);
   fragment.append(columns);
   return fragment;
@@ -1703,7 +1828,7 @@ function buildMatchDetail(match, changes, notes, issues) {
 
 async function showMatch(matchId, openDialog = true) {
   const requestId = ++state.detailRequestId;
-  ui.matchDetail.replaceChildren(contentState("Loading match details", "Retrieving fixture, provenance, and notes.", "loading"));
+  ui.matchDetail.replaceChildren(contentState("Loading match details", "Retrieving fixture and change history.", "loading"));
   if (openDialog && !ui.dialog.open) {
     if (typeof ui.dialog.showModal === "function") {
       ui.dialog.showModal();
@@ -1716,7 +1841,7 @@ async function showMatch(matchId, openDialog = true) {
     const match = await request(`/api/matches/${matchId}`);
     const [changeResult, noteResult] = await Promise.allSettled([
       request(`/api/matches/${matchId}/changes`),
-      request(`/api/matches/${matchId}/notes`),
+      pagesDataUrl ? Promise.resolve([]) : request(`/api/matches/${matchId}/notes`),
     ]);
     if (requestId !== state.detailRequestId) return;
     const changes = changeResult.status === "fulfilled" ? changeResult.value : [];
@@ -1743,6 +1868,16 @@ async function refreshDashboard({ preserveChangePage = false, checkFreshness = t
   state.dashboardRefreshInFlight = true;
   clearAppAlert();
   try {
+    if (pagesDataUrl && (checkFreshness || !publishedData)) {
+      try {
+        publishedData = await fetchPublishedData();
+      } catch (error) {
+        showAppAlert(describeRequestFailure("Published dashboard data", error));
+        renderFreshnessCheck("Update check unavailable; current data remains visible.");
+        scheduleFreshnessPoll();
+        return;
+      }
+    }
     const competitionsLoaded = await loadCompetitions();
     if (competitionsLoaded) await loadMatchdays();
     await Promise.all([
@@ -1753,7 +1888,7 @@ async function refreshDashboard({ preserveChangePage = false, checkFreshness = t
       loadFixtures(),
       loadChanges({ reset: !preserveChangePage }),
     ]);
-    if (checkFreshness) await loadFreshness({ refreshOnChange: false });
+    if (checkFreshness) await loadFreshness({ refreshOnChange: false, reload: false });
   } finally {
     state.dashboardRefreshInFlight = false;
   }
@@ -1769,10 +1904,12 @@ function scheduleFreshnessPoll(delay = FRESHNESS_POLL_INTERVAL_MS) {
   }, delay);
 }
 
-async function loadFreshness({ refreshOnChange = true } = {}) {
-  if (state.freshnessRequestInFlight || document.hidden) return;
+async function loadFreshness({ refreshOnChange = true, reload = true } = {}) {
+  if (state.freshnessRequestInFlight || (state.dashboardRefreshInFlight && reload) || document.hidden) return;
   state.freshnessRequestInFlight = true;
   try {
+    const alreadyLoaded = Boolean(publishedData);
+    if (pagesDataUrl && reload) publishedData = await fetchPublishedData();
     const freshness = await request(
       apiPath("/api/freshness", { competition_season_id: selectedCompetitionId() }),
     );
@@ -1784,8 +1921,7 @@ async function loadFreshness({ refreshOnChange = true } = {}) {
     state.freshnessRetryDelayMs = FRESHNESS_POLL_INTERVAL_MS;
     renderFreshnessCheck("");
     if (
-      refreshOnChange &&
-      revisionChanged
+      refreshOnChange && (revisionChanged || (pagesDataUrl && !alreadyLoaded))
     ) {
       await refreshDashboard({ preserveChangePage: true, checkFreshness: false });
     }
@@ -1844,7 +1980,10 @@ function attachEventListeners() {
     ]);
   });
   document.querySelector("#refresh-dashboard").addEventListener("click", refreshDashboard);
-  document.querySelector("#refresh-changes").addEventListener("click", loadChanges);
+  document.querySelector("#refresh-changes").addEventListener("click", async () => {
+    if (pagesDataUrl) await loadFreshness();
+    await loadChanges();
+  });
   ui.insightTeamSearch.addEventListener("input", renderInsightTeams);
   ui.insightTeamSort.addEventListener("change", renderInsightTeams);
   ui.previousChangePage.addEventListener("click", async () => {
@@ -1891,9 +2030,9 @@ window.addEventListener("error", () => {
   showAppAlert("The dashboard encountered a client-side error. Reload the page and check the browser console if it persists.");
 });
 window.addEventListener("unhandledrejection", () => {
-  showAppAlert("The dashboard could not complete an asynchronous request. Check the visible panel errors and local dashboard service.");
+  showAppAlert("The dashboard could not complete an asynchronous request. Check the visible panel errors and refresh the dashboard.");
 });
 
 initialize().catch(() => {
-  showAppAlert("The dashboard could not start. Reload the page after confirming the local dashboard service is running.");
+  showAppAlert("The dashboard could not start. Reload the page and check whether dashboard data is available.");
 });

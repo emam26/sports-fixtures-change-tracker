@@ -220,3 +220,76 @@ def test_sync_cli_discovers_configured_league_phase_matchdays(
         },
     )
     assert events[2] == ("sync_run_started", {"matchdays": (1, 2, 3)})
+
+
+@pytest.mark.parametrize(
+    ("statuses", "export_fails", "expected_exit", "expected_events"),
+    [
+        (("imported", "skipped"), False, 0, ["lock", "sync", "lease", "export", "lease", "unlock"]),
+        (("imported", "failed"), False, 1, ["lock", "sync", "unlock"]),
+        (("skipped", "skipped"), True, 1, ["lock", "sync", "lease", "export", "unlock"]),
+    ],
+)
+def test_pages_export_is_gated_by_full_sync_and_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statuses,
+    export_fails,
+    expected_exit,
+    expected_events,
+) -> None:
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from sports_tracker.pages_export import PagesExportError
+
+    output = tmp_path / "pages"
+    source = replace(
+        _source_settings(tmp_path),
+        expected_league_phase_matchdays=(3, 4),
+        raw_snapshot_storage="object",
+    )
+    events = []
+
+    class Lease:
+        def __enter__(self):
+            events.append("lock")
+            return self
+
+        def __exit__(self, *_):
+            events.append("unlock")
+
+        def ensure_held(self):
+            events.append("lease")
+
+    class Coordinator:
+        def synchronize(self, matchdays):
+            events.append("sync")
+            assert matchdays == (3, 4)
+            return tuple(
+                SyncOutcome(day, status, "test")
+                for day, status in zip(matchdays, statuses, strict=True)
+            )
+
+    def export(path, connection_factory, source_settings, timestamp):
+        events.append("export")
+        assert path == output
+        assert connection_factory is sync_openligadb.open_postgresql_connection
+        assert source_settings == source
+        assert datetime.now(UTC) >= timestamp
+        if export_fails:
+            raise PagesExportError("reconciliation failed")
+        path.mkdir()
+
+    monkeypatch.setenv("DATABASE_BACKEND", "postgresql")
+    monkeypatch.setattr(sync_openligadb, "load_openligadb_settings", lambda: source)
+    monkeypatch.setattr(sync_openligadb, "load_sync_settings", lambda: _sync_settings(tmp_path))
+    monkeypatch.setattr(sync_openligadb, "load_object_storage_settings", lambda: object())
+    monkeypatch.setattr(sync_openligadb, "PostgreSQLSyncLease", lambda _: Lease())
+    monkeypatch.setattr(sync_openligadb, "SyncCoordinator", lambda **_: Coordinator())
+    monkeypatch.setattr(sync_openligadb, "export_pages", export)
+    monkeypatch.setattr(sys, "argv", ["sync_openligadb.py", "--pages-output", str(output)])
+
+    assert sync_openligadb.main() == expected_exit
+    assert events == expected_events
+    assert output.exists() == (expected_exit == 0)
