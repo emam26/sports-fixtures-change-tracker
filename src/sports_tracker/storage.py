@@ -104,8 +104,15 @@ class LocalSnapshotStore:
         return save_raw_snapshot(response, settings, matchday)
 
 
+class SnapshotKeyPrefix(Protocol):
+    """Storage-independent namespace for immutable capture keys."""
+
+    @property
+    def prefix(self) -> str: ...
+
+
 def build_snapshot_object_key(
-    settings: ObjectStorageSettings,
+    settings: SnapshotKeyPrefix,
     *,
     shortcut: str,
     season: int,

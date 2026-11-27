@@ -1,6 +1,13 @@
 # Manual Runbook
 
-## GitHub Pages operations
+## Neon-only Pages operations (current)
+
+Follow [DEPLOYMENT_PAGES.md](DEPLOYMENT_PAGES.md) for migration 003, the
+PostgreSQL archive preview/apply commands, verification and deployment. The
+previous S3 archive procedures below are retained for legacy evidence and are
+not required for the current Pages deployment.
+
+## Previous GitHub Pages operations (S3-based)
 
 1. Set up Pages, Neon roles, secrets and the private bucket using the [deployment
    guide](DEPLOYMENT_PAGES.md). Leave scheduled runs disabled until the first

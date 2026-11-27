@@ -1,4 +1,4 @@
-"""Preview or apply migration of preserved raw snapshots to private object storage."""
+"""Preview or migrate preserved snapshots to PostgreSQL or legacy object storage."""
 
 from __future__ import annotations
 
@@ -20,6 +20,14 @@ from sports_tracker.config import (
 )
 from sports_tracker.database import database_connection
 from sports_tracker.postgres import postgresql_connection
+from sports_tracker.postgres_snapshot_store import (
+    POSTGRES_ARCHIVE_KEYS,
+    PostgreSQLSnapshotStore,
+    archive_key,
+    check_archive_budget,
+    validate_snapshot_bytes,
+)
+from sports_tracker.snapshot_audit import scan_snapshot_directory
 from sports_tracker.storage import NeonS3SnapshotStore, build_snapshot_object_key
 
 
@@ -226,26 +234,82 @@ def _verify_target_references(
             )
 
 
-def migrate_snapshots(*, apply: bool, schema: str = "public") -> int:
+def _local_archive_captures(root: Path) -> dict[str, tuple[bytes, bytes]]:
+    inventory = scan_snapshot_directory(root)
+    if inventory.corrupt_entries or inventory.missing_file_entries or not inventory.entries:
+        raise SnapshotMigrationError("local snapshot inventory is incomplete or corrupt")
+    captures: dict[str, tuple[bytes, bytes]] = {}
+    for entry in inventory.entries:
+        if entry.status != "valid" or entry.response_path is None or entry.metadata_path is None:
+            raise SnapshotMigrationError("local snapshot inventory has an invalid entry")
+        body = entry.response_path.read_bytes()
+        metadata_bytes = entry.metadata_path.read_bytes()
+        key = archive_key(json.loads(metadata_bytes))
+        validate_snapshot_bytes(key, body, metadata_bytes)
+        if key in captures and captures[key] != (body, metadata_bytes):
+            raise SnapshotMigrationError("local captures have conflicting immutable bytes")
+        captures[key] = (body, metadata_bytes)
+    return captures
+
+
+def migrate_snapshots(
+    *,
+    apply: bool,
+    schema: str = "public",
+    archive: str = "object",
+    raw_root: Path = Path("data/raw"),
+) -> int:
     schema = _validated_schema(schema)
-    object_settings = load_object_storage_settings()
+    if archive not in {"object", "postgresql"}:
+        raise SnapshotMigrationError("unknown snapshot archive")
+    if archive == "postgresql" and schema != "public":
+        raise SnapshotMigrationError("PostgreSQL archive requires the public schema")
+    object_settings = (
+        POSTGRES_ARCHIVE_KEYS if archive == "postgresql" else load_object_storage_settings()
+    )
     transfers = _load_transfers(object_settings)
     with postgresql_connection(load_postgresql_settings()) as target:
         uploaded_keys: list[str] = []
         try:
+            if archive == "postgresql" and apply:
+                target.execute("LOCK TABLE public.source_snapshots IN SHARE ROW EXCLUSIVE MODE")
             _verify_target_references(target, transfers, schema)
+            if archive == "postgresql":
+                captures = _local_archive_captures(raw_root)
+                for transfer in transfers:
+                    if captures.get(transfer.object_key) != (
+                        transfer.body,
+                        transfer.metadata_bytes,
+                    ):
+                        raise SnapshotMigrationError(
+                            "referenced capture does not match the audited local inventory"
+                        )
+                store = PostgreSQLSnapshotStore(target)
+                additional = sum(
+                    store.missing_bytes(key, body, metadata_bytes)
+                    for key, (body, metadata_bytes) in captures.items()
+                )
+                database_bytes = check_archive_budget(target, additional)
+                print(
+                    f"Database size: {database_bytes} bytes; missing archive bytes: {additional}."
+                )
+                print(f"Audited {len(captures)} captures, including unreferenced local evidence.")
+                if apply:
+                    for key, (body, metadata_bytes) in captures.items():
+                        store.put_files(key, body, metadata_bytes)
             if not apply:
                 target.rollback()
                 return len(transfers)
-            store = NeonS3SnapshotStore(object_settings)
-            for transfer in transfers:
-                store.put_files(
-                    transfer.object_key,
-                    transfer.body,
-                    transfer.metadata_bytes,
-                    expected_sha256=transfer.sha256,
-                )
-                uploaded_keys.append(transfer.object_key)
+            if archive == "object":
+                store = NeonS3SnapshotStore(object_settings)
+                for transfer in transfers:
+                    store.put_files(
+                        transfer.object_key,
+                        transfer.body,
+                        transfer.metadata_bytes,
+                        expected_sha256=transfer.sha256,
+                    )
+                    uploaded_keys.append(transfer.object_key)
             cursor = target.cursor()
             for transfer in transfers:
                 cursor.execute(
@@ -281,17 +345,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="upload verified snapshots and update PostgreSQL locators",
+        help="persist verified snapshots and update PostgreSQL locators",
     )
+    parser.add_argument(
+        "--postgresql",
+        action="store_true",
+        help="archive exact local capture pairs in PostgreSQL instead of S3",
+    )
+    parser.add_argument("--raw-root", type=Path, default=Path("data/raw"))
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        count = migrate_snapshots(apply=args.apply, schema=load_postgresql_settings().schema)
+        count = migrate_snapshots(
+            apply=args.apply,
+            schema=load_postgresql_settings().schema,
+            archive="postgresql" if args.postgresql else "object",
+            raw_root=args.raw_root,
+        )
     except (ConfigurationError, OSError, SnapshotMigrationError, RuntimeError) as exc:
         print(f"Snapshot migration stopped safely: {type(exc).__name__}: {exc}")
+        return 1
+    except Exception as exc:
+        print(f"Snapshot migration stopped safely ({type(exc).__name__}).")
         return 1
     mode = "applied" if args.apply else "previewed"
     print(f"Snapshot migration {mode}; verified {count} snapshots.")

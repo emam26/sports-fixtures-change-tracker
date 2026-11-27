@@ -107,6 +107,17 @@ GRANT USAGE, SELECT, UPDATE ON SEQUENCE
     public.match_notes_match_note_id_seq
 TO sports_tracker_migrator;
 
+-- Reapplying this script after the additive archive migration must retain its grants.
+DO $$
+BEGIN
+    IF to_regclass('public.raw_snapshot_blobs') IS NOT NULL THEN
+        REVOKE ALL ON TABLE public.raw_snapshot_blobs FROM PUBLIC;
+        GRANT SELECT, INSERT ON TABLE public.raw_snapshot_blobs
+            TO sports_tracker_sync, sports_tracker_migrator;
+    END IF;
+END
+$$;
+
 -- Future tables and sequences require an explicit privilege review; do not use
 -- broad default grants that would expose internal objects automatically.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public

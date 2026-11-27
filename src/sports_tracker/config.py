@@ -20,7 +20,7 @@ class ConfigurationError(ValueError):
 
 ApplicationDeploymentMode = Literal["local", "public_readonly"]
 DatabaseBackend = Literal["sqlserver", "postgresql"]
-SnapshotStorageMode = Literal["local", "object"]
+SnapshotStorageMode = Literal["local", "object", "postgresql"]
 
 
 @dataclass(frozen=True, repr=False)
@@ -557,8 +557,8 @@ def load_openligadb_settings(
         default=18,
     )
     raw_snapshot_storage = str(values.get("RAW_SNAPSHOT_STORAGE", "local")).strip().lower()
-    if raw_snapshot_storage not in {"local", "object"}:
-        raise ConfigurationError("RAW_SNAPSHOT_STORAGE must be local or object")
+    if raw_snapshot_storage not in {"local", "object", "postgresql"}:
+        raise ConfigurationError("RAW_SNAPSHOT_STORAGE must be local, object or postgresql")
     return OpenLigaDBSettings(
         base_url=base_url,
         shortcut=shortcut,

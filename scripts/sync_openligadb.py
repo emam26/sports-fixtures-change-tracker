@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from sports_tracker.openligadb import (
 )
 from sports_tracker.pages_export import PagesExportError, export_pages, load_pages_snapshot
 from sports_tracker.postgres_ingestion import PostgreSQLImportStore
+from sports_tracker.postgres_snapshot_store import check_archive_budget
 from sports_tracker.postgres_synchronization import (
     PostgreSQLCheckpointReader,
     PostgreSQLMatchdayReader,
@@ -176,11 +178,13 @@ def main() -> int:
             load_object_storage_settings()
         backend = load_database_backend()
         if args.pages_output is not None and (
-            backend != "postgresql" or source.raw_snapshot_storage != "object"
+            backend != "postgresql" or source.raw_snapshot_storage not in {"object", "postgresql"}
         ):
             raise ConfigurationError(
-                "Pages publication requires PostgreSQL and private object storage"
+                "Pages publication requires PostgreSQL and durable private snapshot storage"
             )
+        if source.raw_snapshot_storage == "postgresql" and backend != "postgresql":
+            raise ConfigurationError("PostgreSQL archive requires the PostgreSQL backend")
         if backend == "postgresql":
             connection_factory = open_postgresql_connection
             matchday_reader = PostgreSQLMatchdayReader
@@ -203,6 +207,13 @@ def main() -> int:
             ),
         )
         with sync_lock:
+            if source.raw_snapshot_storage == "postgresql":
+                with closing(connection_factory()) as archive_connection:
+                    archive_connection.execute(
+                        "SELECT snapshot_key FROM public.raw_snapshot_blobs LIMIT 1"
+                    )
+                    database_bytes = check_archive_budget(archive_connection)
+                    print(f"PostgreSQL database size before sync: {database_bytes} bytes.")
             matchdays, discovery, selections = _select_matchdays(
                 args,
                 source=source,

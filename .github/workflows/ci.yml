@@ -13,10 +13,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -30,4 +30,32 @@ jobs:
         run: ruff format --check .
 
       - name: Run offline tests
-        run: python -m pytest -q -m "not sqlserver and not neon"
+        run: python -m pytest -q -m "not sqlserver and not neon and not postgres_archive"
+
+  postgres-archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: archive_test_owner
+          POSTGRES_PASSWORD: archive-ci-only
+          POSTGRES_DB: archive_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U archive_test_owner -d archive_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      RUN_POSTGRES_ARCHIVE_TESTS: "yes"
+      POSTGRES_ARCHIVE_TEST_URL: postgresql://archive_test_owner:archive-ci-only@127.0.0.1:5432/archive_test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ".[dev,sqlserver]"
+      - run: python -m pytest -q -m postgres_archive

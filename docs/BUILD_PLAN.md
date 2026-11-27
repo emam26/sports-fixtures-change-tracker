@@ -1,6 +1,28 @@
 # Build Plan
 
-## GitHub Pages migration — 2026-11-27
+## Neon-only Pages migration — implementation handoff
+
+Added the private PostgreSQL exact-byte archive (migration 003), insert-only
+runtime grants, a size guard, archive integration tests and a disposable
+PostgreSQL CI service. Existing local capture, SQL Server and optional legacy S3
+paths remain available. The daily workflow uses only the Neon sync secret.
+Historical migration checks local/SQL Server/Neon references, archives all audited
+local captures including unreferenced evidence, and updates locators atomically.
+No production SQL, secret, workflow dispatch or Pages deployment was performed.
+The first branch CI run reported Ruff line length/import order errors and a
+missing pyodbc dependency during integration test collection. Corrected those,
+formatting, and a SQL dollar-quote delimiter in the role script. Run 45985994290
+passed lint and the isolated PostgreSQL archive integration job but reported one
+remaining Ruff formatting difference; corrected that exact difference and updated
+checkout/setup-python to Node.js 24-based v6 actions. Run 45986670120 passed
+lint, formatting and the isolated archive integration test; offline tests had
+217 passes and two failures caused by obsolete workflow assertions. Updated the
+assertions to require the new PostgreSQL archive, explicit deployment gates,
+and a separate disposable integration service without production secrets.
+The next CI run is unverified; require both jobs to pass before merging. Then follow
+DEPLOYMENT_PAGES.md for owner-run staged migration and verification.
+
+## Previous GitHub Pages migration — 2026-11-27
 
 The daily Pages workflow, validated export, theme, and deployment instructions are
 implemented. The default branch can run the workflow manually and on a daily

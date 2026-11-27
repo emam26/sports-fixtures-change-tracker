@@ -20,8 +20,6 @@ Sports Fixtures & Change Tracker collects football fixture data from OpenLigaDB,
 > **I learned to validate football data, preserve source history, and trace fixture changes over time.**
 >
 > **I built:** a pipeline for immutable snapshots, validated imports, field-level change tracking, match analytics, and a public dashboard.
-The project has two deployment paths:
-
 ## Explore the dashboard
 
 | Section | What you can explore |
@@ -59,7 +57,7 @@ Result rows and goal-event rows are database records, not necessarily the number
 - **Transactional database writes:** fixtures, scores, events, change history, checkpoints, and import-run evidence are handled together.
 - **Idempotent replay:** an unchanged source snapshot can be reprocessed without fabricating new changes.
 - **Field-level change tracking:** historical observations are distinguishable from the current fixture state.
-- **Static public access:** the browser reads a same-origin JSON export. GitHub Actions holds the Neon and object-store credentials and publishes an artifact from a fixed file allowlist.
+- **Static public access:** the browser reads a same-origin JSON export. GitHub Actions holds the Neon synchronization credential and publishes an artifact from a fixed file allowlist.
 - **Shared frontend:** HTML, CSS, and JavaScript use FastAPI locally and validated JSON on Pages.
 
 ### Architecture
@@ -71,7 +69,7 @@ flowchart TD
     C --> D[Local FastAPI dashboard]
     C -. Historical migration .-> G[(Neon PostgreSQL)]
     A --> E[Daily GitHub Actions sync]
-    E --> F[(Private S3-compatible snapshot archive)]
+    E --> F[(Private raw snapshot archive in Neon)]
     E --> G
     G --> H[Validation and SQL reconciliation]
     F --> H
@@ -136,7 +134,7 @@ Read [the manual runbook](docs/MANUAL_RUNBOOK.md) before running a real import o
 ```bash
 ruff check .
 ruff format --check .
-python -m pytest -q -m "not sqlserver and not neon"
+python -m pytest -q -m "not sqlserver and not neon and not postgres_archive"
 ```
 
 SQL Server and Neon integration tests require isolated targets and explicit opt-in. See the [testing guide](docs/TESTING.md).
@@ -175,7 +173,7 @@ SQL Server and Neon integration tests require isolated targets and explicit opt-
 | Historical SQL Server → Neon migration | Verified (12/12 checked tables matched) |
 | Render-hosted public dashboard | **Deployed**; database API connectivity verified |
 | GitHub Pages and automated cloud sync | Implemented. Production setup and an observed scheduled run are pending. |
-| Durable cloud storage for raw source snapshots | Private S3-compatible adapter. Production bucket and historical object audit require verification. |
+| Durable cloud storage for raw source snapshots | PostgreSQL BYTEA archive; production migration and audit require verification. |
 | Knockout-stage tracking and other competitions | Outside the published scope |
 
 The workflow is scheduled once daily at **8:17 AM Bangladesh time (02:17 UTC)**. GitHub may delay the start. **Daily polling can miss intermediate source changes**, including updates that are reversed between polls. The dashboard records observed changes and OpenLigaDB can update records late or leave fields incomplete. [Deployment and verification instructions](docs/DEPLOYMENT_PAGES.md)
