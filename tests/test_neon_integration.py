@@ -32,8 +32,8 @@ def test_opt_in_neon_database_and_object_storage_round_trip() -> None:
 
     with postgresql_connection(load_postgresql_settings()) as connection:
         cursor = connection.cursor()
-        cursor.execute("SELECT 1")
-        assert cursor.fetchone()[0] == 1
+        cursor.execute("SELECT 1 AS ready")
+        assert cursor.fetchone()["ready"] == 1
 
     body = b'{"verification": true}'
     key = f"verification/{uuid4().hex}"

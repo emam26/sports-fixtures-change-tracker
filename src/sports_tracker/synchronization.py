@@ -436,6 +436,7 @@ class SyncCoordinator:
         checkpoint_reader_factory=None,
         store_factory=None,
         snapshot_capture=None,
+        snapshot_loader=None,
     ) -> None:
         self._client = client
         self._connection_factory = connection_factory
@@ -444,6 +445,7 @@ class SyncCoordinator:
         self._checkpoints = (checkpoint_reader_factory or SQLCheckpointReader)(connection_factory)
         self._store_factory = store_factory or SQLServerImportStore
         self._snapshot_capture = snapshot_capture or preserve_sync_response
+        self._snapshot_loader = snapshot_loader or load_snapshot
 
     def _should_fetch(self, signal: LastChangeSignal, checkpoint: datetime | None) -> bool:
         if not signal.reliable or signal.changed_at_utc is None:
@@ -505,7 +507,7 @@ class SyncCoordinator:
             settings=self._settings,
             matchday=matchday,
         )
-        parsed = load_snapshot(directory, self._settings)
+        parsed = self._snapshot_loader(directory, self._settings)
         if self._settings.raw_snapshot_storage == "object":
             object_settings = load_object_storage_settings()
             digest = hashlib.sha256(response.body).hexdigest()
@@ -527,6 +529,8 @@ class SyncCoordinator:
                 store = self._store_factory(connection)
                 processor = SnapshotImportProcessor(store)
                 result = processor.import_snapshot(parsed)
+                if result.status != "Succeeded":
+                    raise SyncError("Snapshot validation did not succeed.")
         except Exception as exc:
             self._logger.write(
                 "sync_import_failed",

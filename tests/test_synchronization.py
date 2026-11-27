@@ -270,9 +270,11 @@ def test_sync_capture_never_overwrites_same_snapshot(tmp_path: Path) -> None:
         preserve_sync_response(response, settings=settings, matchday=4)
 
 
+@pytest.mark.parametrize("import_status", ["Succeeded", "Failed"])
 def test_coordinator_passes_validated_settings_to_snapshot_loader(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    import_status,
 ) -> None:
     settings = _settings(tmp_path)
     signal = LastChangeSignal(
@@ -319,7 +321,7 @@ def test_coordinator_passes_validated_settings_to_snapshot_loader(
 
         def import_snapshot(self, received: object):
             assert received.source_last_change_utc == signal.changed_at_utc
-            return SimpleNamespace(import_run_id=7)
+            return SimpleNamespace(import_run_id=7, status=import_status)
 
     monkeypatch.setattr(
         "sports_tracker.synchronization.preserve_sync_response",
@@ -337,6 +339,9 @@ def test_coordinator_passes_validated_settings_to_snapshot_loader(
     )
     coordinator._checkpoints = SimpleNamespace(last_source_update=lambda **_: None)
 
+    if import_status == "Failed":
+        assert coordinator.synchronize((3,))[0].status == "failed"
+        return
     outcome = coordinator.synchronize_matchday(3)
 
     assert outcome.status == "imported"

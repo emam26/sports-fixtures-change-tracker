@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from datetime import datetime
+from threading import Event, Lock, Thread, current_thread
 from uuid import uuid4
 
 from .runtime import ConnectionFactory
@@ -122,6 +123,10 @@ class PostgreSQLSyncLease:
         self._lease_seconds = lease_seconds
         self._owner_token = uuid4().hex
         self._connection = None
+        self._connection_lock = Lock()
+        self._heartbeat_error = False
+        self._heartbeat_stop = Event()
+        self._heartbeat_thread: Thread | None = None
 
     def acquire(self) -> None:
         connection = self._connection_factory()
@@ -152,83 +157,78 @@ class PostgreSQLSyncLease:
         self._start_heartbeat()
 
     def _start_heartbeat(self) -> None:
-        import threading
-
-        stop_event = threading.Event()
-        self._heartbeat_stop = stop_event
+        self._heartbeat_stop.clear()
+        self._heartbeat_error = False
 
         def keep_alive() -> None:
             interval = max(1.0, min(self._lease_seconds / 3, 60.0))
-            while not stop_event.wait(interval):
+            while not self._heartbeat_stop.wait(interval):
                 try:
                     self.renew()
                 except Exception:
                     self._heartbeat_error = True
-                    stop_event.set()
+                    self._heartbeat_stop.set()
                     return
 
-        heartbeat = threading.Thread(
-            target=keep_alive,
-            name="sports-tracker-sync-lease",
-            daemon=True,
+        self._heartbeat_thread = Thread(
+            target=keep_alive, name="sports-tracker-sync-lease", daemon=True
         )
-        self._heartbeat_thread = heartbeat
-        heartbeat.start()
+        self._heartbeat_thread.start()
+
+    def ensure_held(self) -> None:
+        """Fail the publication if the database lease was interrupted."""
+        if self._heartbeat_error:
+            raise SyncAlreadyRunningError("the PostgreSQL synchronization heartbeat failed")
+        self.renew()
 
     def renew(self) -> None:
         """Extend the lease only while this owner still holds it."""
+        with self._connection_lock:
+            connection = self._connection
+            if connection is None:
+                raise RuntimeError("cannot renew a PostgreSQL sync lease that is not held")
 
-        connection = self._connection
-        if connection is None:
-            raise RuntimeError("cannot renew a PostgreSQL sync lease that is not held")
-
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    UPDATE sync_leases
-                    SET expires_at_utc = CURRENT_TIMESTAMP
-                        + (%s * INTERVAL '1 second')
-                    WHERE lease_key = %s
-                      AND owner_token = %s
-                      AND expires_at_utc > CURRENT_TIMESTAMP
-                    """,
-                    (self._lease_seconds, self._lease_key, self._owner_token),
-                )
-                if cursor.rowcount != 1:
-                    connection.rollback()
-                    self.release()
-                    raise SyncAlreadyRunningError(
-                        "the PostgreSQL synchronization lease was lost before renewal"
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE sync_leases
+                        SET expires_at_utc = CURRENT_TIMESTAMP
+                            + (%s * INTERVAL '1 second')
+                        WHERE lease_key = %s
+                          AND owner_token = %s
+                          AND expires_at_utc > CURRENT_TIMESTAMP
+                        """,
+                        (self._lease_seconds, self._lease_key, self._owner_token),
                     )
-            connection.commit()
-        except SyncAlreadyRunningError:
-            raise
-        except Exception:
-            connection.rollback()
-            raise
+                    if cursor.rowcount != 1:
+                        raise SyncAlreadyRunningError(
+                            "the PostgreSQL synchronization lease was lost before renewal"
+                        )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     def release(self) -> None:
-        import threading
-
-        stop_event = getattr(self, "_heartbeat_stop", None)
-        if stop_event is not None:
-            stop_event.set()
-        heartbeat = getattr(self, "_heartbeat_thread", None)
-        if heartbeat is not None and heartbeat is not threading.current_thread():
+        self._heartbeat_stop.set()
+        heartbeat = self._heartbeat_thread
+        if heartbeat is not None and heartbeat is not current_thread():
             heartbeat.join(timeout=2)
-        if self._connection is None:
-            return
-        try:
-            cursor = self._connection.cursor()
-            cursor.execute(
-                "DELETE FROM sync_leases WHERE lease_key = %s AND owner_token = %s",
-                (self._lease_key, self._owner_token),
-            )
-            self._connection.commit()
-        finally:
-            self._connection.close()
-            self._connection = None
+        with self._connection_lock:
+            connection = self._connection
+            if connection is None:
+                return
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM sync_leases WHERE lease_key = %s AND owner_token = %s",
+                        (self._lease_key, self._owner_token),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+                self._connection = None
 
     def __enter__(self) -> PostgreSQLSyncLease:
         self.acquire()

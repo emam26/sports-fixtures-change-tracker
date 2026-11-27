@@ -42,11 +42,8 @@ class _Connection:
 
 
 def _lease(connection: _Connection) -> PostgreSQLSyncLease:
-    lease = object.__new__(PostgreSQLSyncLease)
+    lease = PostgreSQLSyncLease(lambda: connection, lease_key="test")
     lease._connection = connection
-    lease._lease_seconds = 1800
-    lease._lease_key = "test"
-    lease._owner_token = "owner"
     return lease
 
 
@@ -69,4 +66,6 @@ def test_lease_renewal_fails_closed_when_owner_lost() -> None:
         lease.renew()
 
     assert connection.rollbacks == 1
+    assert connection.commits == 0
+    lease.release()
     assert connection.closed

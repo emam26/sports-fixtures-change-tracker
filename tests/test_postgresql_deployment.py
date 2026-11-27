@@ -196,7 +196,7 @@ def test_postgresql_repository_rejects_unsafe_schema_identifier() -> None:
         PostgreSQLRepository(lambda: _Connection(_Cursor()), schema='public".unsafe')
 
 
-def test_postgresql_import_store_uses_fixture_fields_and_returning_id() -> None:
+def test_postgresql_import_store_inserts_and_updates_validated_fixture_fields() -> None:
     cursor = _ReturningCursor()
     connection = _Connection(cursor)
     fixture = FixtureData(
@@ -223,6 +223,12 @@ def test_postgresql_import_store_uses_fixture_fields_and_returning_id() -> None:
     assert "RETURNING match_id AS new_id" in cursor.statement
     assert "source_last_update_utc" not in cursor.statement
     assert len(cursor.parameters) == 14
+
+    PostgreSQLImportStore(connection).update_match(match_id, fixture, 11, 12)
+
+    assert "UPDATE matches" in cursor.statement
+    assert "source_last_update_utc" not in cursor.statement
+    assert cursor.parameters == (11, 12, 2, None, None, None, None, False, None, None, None, 41)
 
 
 def test_local_snapshot_store_rejects_overwrite_and_hash_mismatch(tmp_path: Path) -> None:

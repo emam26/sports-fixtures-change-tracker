@@ -62,6 +62,7 @@ GRANT SELECT, INSERT, UPDATE ON TABLE
     public.sync_checkpoints
 TO sports_tracker_sync;
 GRANT SELECT, INSERT, DELETE ON TABLE public.sync_leases TO sports_tracker_sync;
+GRANT UPDATE (expires_at_utc) ON TABLE public.sync_leases TO sports_tracker_sync;
 GRANT USAGE, SELECT ON SEQUENCE
     public.competitions_competition_id_seq,
     public.competition_seasons_competition_season_id_seq,

@@ -449,7 +449,7 @@ class PostgreSQLImportStore:
             SET home_team_id = %s, away_team_id = %s, matchday_number = %s,
                 source_group_id = %s, source_group_order_id = %s,
                 source_group_name = %s, kickoff_utc = %s,
-                source_match_is_finished = %s, source_last_update_utc = %s,
+                source_match_is_finished = %s,
                 source_last_update_raw = %s, source_time_zone_id = %s,
                 location = %s, updated_at_utc = CURRENT_TIMESTAMP
             WHERE match_id = %s
@@ -463,7 +463,6 @@ class PostgreSQLImportStore:
                 fixture.source_group_name,
                 _postgres_datetime(fixture.kickoff_utc),
                 fixture.match_is_finished,
-                _postgres_datetime(fixture.source_last_update_utc),
                 fixture.source_last_update_raw,
                 fixture.source_time_zone_id,
                 fixture.location,
