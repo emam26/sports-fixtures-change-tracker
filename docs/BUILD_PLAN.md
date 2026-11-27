@@ -11,8 +11,11 @@ local captures including unreferenced evidence, and updates locators atomically.
 No production SQL, secret, workflow dispatch or Pages deployment was performed.
 The first branch CI run reported Ruff line length/import order errors and a
 missing pyodbc dependency during integration test collection. Corrected those,
-formatting, and a SQL dollar-quote delimiter in the role script. The new CI
-results remain unverified; require both jobs to pass before merging. Then follow
+formatting, and a SQL dollar-quote delimiter in the role script. Run 45985994290
+passed lint and the isolated PostgreSQL archive integration job but reported one
+remaining Ruff formatting difference; corrected that exact difference and updated
+checkout/setup-python to Node.js 24-based v6 actions. The next CI run is not yet
+verified; require both jobs to pass before merging. Then follow
 DEPLOYMENT_PAGES.md for owner-run staged migration and verification.
 
 ## Previous GitHub Pages migration — 2026-11-27

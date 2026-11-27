@@ -43,9 +43,7 @@ def test_exact_bytes_and_archive_identity():
 
 
 def test_database_size_guard():
-    result = SimpleNamespace(
-        fetchone=lambda: {"database_bytes": ARCHIVE_DATABASE_LIMIT_BYTES - 5}
-    )
+    result = SimpleNamespace(fetchone=lambda: {"database_bytes": ARCHIVE_DATABASE_LIMIT_BYTES - 5})
     connection = SimpleNamespace(execute=lambda _: result)
     assert check_archive_budget(connection, 5) == ARCHIVE_DATABASE_LIMIT_BYTES - 5
     with pytest.raises(SnapshotStorageError, match="size guard"):
