@@ -30,7 +30,6 @@ Sports Fixtures & Change Tracker collects football fixture data from OpenLigaDB,
 | **Change Intelligence** | Fixture and result history, field-level before/after values, and source provenance where available. |
 
 
-On Pages, **Last successful sync** shows when the published synchronization pass finished, in the browser’s timezone. Failed passes leave the published timestamp and data in place. Unfinished matches can have missing scores.
 
 ## Data coverage and verification
 
