@@ -50,9 +50,7 @@ def archive_key(metadata: dict[str, Any]) -> str:
         raise SnapshotStorageError("archive metadata identity is invalid") from exc
 
 
-def validate_snapshot_bytes(
-    key: str, body: bytes, metadata_bytes: bytes
-) -> dict[str, Any]:
+def validate_snapshot_bytes(key: str, body: bytes, metadata_bytes: bytes) -> dict[str, Any]:
     """Verify identity and exact response bytes without rewriting metadata."""
     try:
         metadata = json.loads(metadata_bytes)
@@ -147,9 +145,7 @@ class PostgreSQLSnapshotStore:
             raise SnapshotStorageError("PostgreSQL archive read-after-write verification failed")
 
     def put(self, key: str, body: bytes, metadata: dict[str, object]) -> None:
-        metadata_bytes = (json.dumps(metadata, indent=2, ensure_ascii=False) + "\n").encode(
-            "utf-8"
-        )
+        metadata_bytes = (json.dumps(metadata, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         self.put_files(key, body, metadata_bytes)
 
     def get(self, key: str) -> SnapshotBlob:

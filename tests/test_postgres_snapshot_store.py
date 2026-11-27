@@ -71,10 +71,11 @@ def test_postgres_archive_roundtrip_and_role_permissions():
         connection.execute("CREATE ROLE archive_test_sync LOGIN")
         connection.execute("GRANT sports_tracker_sync TO archive_test_sync")
         connection.execute("SET ROLE archive_test_sync")
-        assert not connection.execute(
+        api_access = connection.execute(
             "SELECT has_table_privilege('sports_tracker_api', "
             "'public.raw_snapshot_blobs', 'SELECT') AS allowed"
-        ).fetchone()["allowed"]
+        ).fetchone()
+        assert api_access["allowed"] is False
         connection.autocommit = False
         store = PostgreSQLSnapshotStore(connection)
         store.put_files(key, body, metadata)

@@ -21,8 +21,8 @@ from sports_tracker.openligadb import (
     SeasonDiscovery,
 )
 from sports_tracker.pages_export import PagesExportError, export_pages, load_pages_snapshot
-from sports_tracker.postgres_snapshot_store import check_archive_budget
 from sports_tracker.postgres_ingestion import PostgreSQLImportStore
+from sports_tracker.postgres_snapshot_store import check_archive_budget
 from sports_tracker.postgres_synchronization import (
     PostgreSQLCheckpointReader,
     PostgreSQLMatchdayReader,

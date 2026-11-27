@@ -277,7 +277,10 @@ def migrate_snapshots(
             if archive == "postgresql":
                 captures = _local_archive_captures(raw_root)
                 for transfer in transfers:
-                    if captures.get(transfer.object_key) != (transfer.body, transfer.metadata_bytes):
+                    if captures.get(transfer.object_key) != (
+                        transfer.body,
+                        transfer.metadata_bytes,
+                    ):
                         raise SnapshotMigrationError(
                             "referenced capture does not match the audited local inventory"
                         )
@@ -287,7 +290,9 @@ def migrate_snapshots(
                     for key, (body, metadata_bytes) in captures.items()
                 )
                 database_bytes = check_archive_budget(target, additional)
-                print(f"Database size: {database_bytes} bytes; missing archive bytes: {additional}.")
+                print(
+                    f"Database size: {database_bytes} bytes; missing archive bytes: {additional}."
+                )
                 print(f"Audited {len(captures)} captures, including unreferenced local evidence.")
                 if apply:
                     for key, (body, metadata_bytes) in captures.items():
