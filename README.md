@@ -22,11 +22,6 @@ Sports Fixtures & Change Tracker collects football fixture data from OpenLigaDB,
 > **I built:** a pipeline for immutable snapshots, validated imports, field-level change tracking, match analytics, and a public dashboard.
 The project has two deployment paths:
 
-- **Local data pipeline:** immutable OpenLigaDB response snapshots, validation, transactional import, and historical change tracking in Microsoft SQL Server.
-- **Public, read-only dashboard:** GitHub Actions updates Neon PostgreSQL, verifies private snapshot provenance, exports validated JSON and deploys the HTML/CSS/JavaScript dashboard to GitHub Pages.
-
-The existing Render site stays available during rollout. The GitHub Pages cutover and unattended cloud synchronization require the repository setup in [Deployment to GitHub Pages](docs/DEPLOYMENT_PAGES.md).
-
 ## Explore the dashboard
 
 | Section | What you can explore |
