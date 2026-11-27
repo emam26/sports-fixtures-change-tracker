@@ -86,8 +86,30 @@ textarea:focus-visible {
 
 .site-header {
   color: #fff;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   border-bottom: 1px solid rgb(216 252 139 / 25%);
   background: linear-gradient(116deg, var(--forest-deep), var(--forest) 64%, #246047);
+}
+
+.site-header::after {
+  position: absolute;
+  z-index: -1;
+  right: max(-4rem, calc((100vw - 1376px) / 2));
+  top: 50%;
+  width: min(43rem, 50vw);
+  aspect-ratio: 1.65;
+  border: 1px solid rgb(220 247 221 / 24%);
+  border-radius: 1rem;
+  content: "";
+  background:
+    radial-gradient(circle at center, transparent 17%, rgb(220 247 221 / 24%) 17.2% 17.5%, transparent 17.7%),
+    linear-gradient(90deg, transparent calc(50% - 1px), rgb(220 247 221 / 24%) 50%, transparent calc(50% + 1px)),
+    repeating-linear-gradient(90deg, transparent 0 12.5%, rgb(220 247 221 / 4%) 12.5% 25%);
+  mask-image: linear-gradient(90deg, transparent, #000 48%);
+  pointer-events: none;
+  transform: translateY(-50%) rotate(-12deg);
 }
 
 .header-grid {

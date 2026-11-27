@@ -515,7 +515,7 @@ def test_dashboard_shell_assets_and_data_contracts_are_served() -> None:
     assert 'id="operations"' not in dashboard_response.text
     assert 'id="last-updated"' in dashboard_response.text
     assert "Last updated" in dashboard_response.text
-    assert "/assets/styles.css?v=20261127-header" in dashboard_response.text
+    assert "/assets/styles.css?v=20261127-pitch" in dashboard_response.text
     assert "/assets/app.js?v=20261127-pages" in dashboard_response.text
     nav_start = dashboard_response.text.index('<nav class="section-nav"')
     nav_end = dashboard_response.text.index("</nav>", nav_start)
