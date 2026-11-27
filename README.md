@@ -8,7 +8,7 @@
 [![Source](https://img.shields.io/badge/Football%20data-OpenLigaDB-334155)](https://www.openligadb.de/)
 ![What I learned](https://img.shields.io/badge/What_I_learned-data_pipelines_%26_change_tracking-198754?style=flat-square)
 
-### [**Open the current Render dashboard**](https://sports-fixtures-change-tracker.onrender.com/)
+### [**Open the live dashboard**](https://emam26.github.io/sports-fixtures-change-tracker/)
 
 > **Coverage:** UEFA Champions League **2026/2027 league phase** (matchdays 1–8). This project tracks stored source observations and changes
 
