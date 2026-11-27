@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="Local UEFA Champions League fixtures and observed change dashboard"
+      content="UEFA Champions League fixtures, results, analytics and observed changes"
     >
     <title>Sports Fixtures &amp; Change Tracker</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230a1b35'/%3E%3Cpath d='M16 32h32M32 16v32' stroke='%2390bdfb' stroke-width='6'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b2923'/%3E%3Cpath d='M16 32h32M32 16v32' stroke='%23d6f77a' stroke-width='6'/%3E%3C/svg%3E"
     >
-    <link rel="stylesheet" href="/assets/styles.css?v=20261107-explorer-polish">
+    <link rel="stylesheet" href="/assets/styles.css?v=20261127-pitch">
     <script src="/assets/app.js?v=20261107-explorer-polish" defer></script>
   </head>
   <body>
@@ -21,7 +21,7 @@
     <header class="site-header">
       <div class="shell header-grid">
         <div class="brand-block">
-          <p class="eyebrow">Local football data intelligence</p>
+          <p class="eyebrow">UEFA Champions League</p>
           <h1>Fixtures &amp; Change Tracker</h1>
         </div>
       </div>
@@ -42,7 +42,6 @@
       <section id="overview" class="dashboard-section overview-section" aria-labelledby="overview-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Competition at a glance</p>
             <h2 id="overview-title">Overview</h2>
           </div>
           <button id="refresh-dashboard" class="button button-secondary" type="button">
@@ -95,17 +94,16 @@
         <section class="upcoming-panel" aria-labelledby="upcoming-fixtures-title">
           <div class="upcoming-panel-heading">
             <div>
-              <p class="eyebrow">Scheduled next</p>
               <h3 id="upcoming-fixtures-title">Upcoming fixtures</h3>
             </div>
             <p id="upcoming-status" class="status-message" role="status" aria-live="polite">
-              Loading unfinished fixturesâ€¦
+              Loading unfinished fixtures…
             </p>
           </div>
           <div id="upcoming-list" class="upcoming-fixture-list" aria-live="polite" aria-busy="true">
             <div class="content-state loading-state">
               <span class="loading-dot" aria-hidden="true"></span>
-              Loading upcoming fixturesâ€¦
+              Loading upcoming fixtures…
             </div>
           </div>
         </section>
@@ -114,7 +112,6 @@
       <section id="insights" class="dashboard-section insights-section" aria-labelledby="insights-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Evidence-based match analysis</p>
             <h2 id="insights-title">Insights</h2>
           </div>
           <p id="insights-status" class="status-message" role="status" aria-live="polite">
@@ -152,7 +149,6 @@
           <article class="insight-panel">
             <div class="insight-panel-heading">
               <div>
-                <p class="eyebrow">League-phase rhythm</p>
                 <h3>Goals by matchday</h3>
               </div>
               <span id="insight-goal-trend-summary" class="metadata">Waiting for data</span>
@@ -169,7 +165,6 @@
           <article class="insight-panel">
             <div class="insight-panel-heading">
               <div>
-                <p class="eyebrow">Result balance</p>
                 <h3>Home, draw and away results</h3>
               </div>
             </div>
@@ -191,7 +186,6 @@
         <article class="insight-panel team-insight-panel">
           <div class="insight-panel-heading">
             <div>
-              <p class="eyebrow">Club performance</p>
               <h3>Team comparison</h3>
             </div>
             <p class="metadata">Select a team for recent results.</p>
@@ -241,7 +235,6 @@
         <article class="insight-panel">
           <div class="insight-panel-heading">
             <div>
-              <p class="eyebrow">Standout results</p>
               <h3>Highest-scoring completed matches</h3>
             </div>
           </div>
@@ -252,7 +245,6 @@
       <section id="match-explorer" class="dashboard-section" aria-labelledby="match-explorer-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Browse the competition</p>
             <h2 id="match-explorer-title">Match explorer</h2>
           </div>
           <p id="fixture-status" class="status-message" role="status" aria-live="polite">
@@ -321,7 +313,6 @@
       >
         <div class="section-heading">
           <div>
-          <p class="eyebrow">Fixture updates observed</p>
             <h2 id="change-intelligence-title">Change intelligence</h2>
           </div>
           <button id="refresh-changes" class="button button-secondary" type="button">
