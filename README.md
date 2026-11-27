@@ -6,6 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/Cloud%20DB-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Source](https://img.shields.io/badge/Football%20data-OpenLigaDB-334155)](https://www.openligadb.de/)
+![What I learned](https://img.shields.io/badge/What_I_learned-data_pipelines_%26_change_tracking-198754?style=flat-square)
 
 ### [**Open the current Render dashboard**](https://sports-fixtures-change-tracker.onrender.com/)
 
@@ -15,6 +16,10 @@
 
 Sports Fixtures & Change Tracker collects football fixture data from OpenLigaDB, validates it before import, and preserves what changed between observations. It is built around a simple question: **not just what does a fixture say now, but what did the source report previously, and how did it change?**
 
+> [!TIP]
+> **I learned to validate football data, preserve source history, and trace fixture changes over time.**
+>
+> **I built:** a pipeline for immutable snapshots, validated imports, field-level change tracking, match analytics, and a public dashboard.
 The project has two deployment paths:
 
 - **Local data pipeline:** immutable OpenLigaDB response snapshots, validation, transactional import, and historical change tracking in Microsoft SQL Server.
