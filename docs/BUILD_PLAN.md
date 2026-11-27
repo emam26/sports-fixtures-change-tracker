@@ -1,5 +1,46 @@
 # Build Plan
 
+## GitHub Pages migration — 2026-11-27
+
+The daily Pages workflow, validated export, theme, and deployment instructions are
+implemented. The default branch can run the workflow manually and on a daily
+02:17 UTC (08:17 Bangladesh time) schedule when enabled. SQL Server and FastAPI
+remain available for local development. The existing Render service was retained
+and returned HTTP 200 in a read-only check.
+
+### Verification from this workspace
+
+- Baseline: 209 tests passed and two opt-in integrations skipped. All 219 tests
+  passed with both integration checks pointed at disposable services. Ruff lint
+  and formatting, actionlint, JavaScript syntax and Git whitespace checks passed.
+  The suite reports one Starlette TestClient deprecation warning.
+- Live OpenLigaDB data synchronized all eight matchdays into a disposable
+  PostgreSQL 17 database using the sync role, certificate verification, channel
+  binding, and an isolated S3-compatible test server. The database and object round
+  trip integration test passed against those isolated services. The SQL Server 2022
+  integration passed after the repository schema loaded. A local FastAPI smoke
+  check used that database and 18 real fixtures to exercise the fixture list,
+  analytics, match detail and local notes.
+- An independent SQL comparison checked 144 fixtures (90 finished, 54 upcoming),
+  details and results, 338 goal rows, eight matchdays, 36 teams, and 36 intentionally
+  generated field-change events across 18 fixtures. The field changes came from a
+  controlled replay and serve as test evidence only. Its unchanged repeat preserved
+  domain and change counts. A repeat with eight reliable unchanged source signals
+  still produced a reconciled export. A concurrent run exited before synchronization.
+  A shortened source response failed validation, generated no new site, and left
+  the prior site bytes intact.
+- Chromium passed desktop and mobile checks at a repository-style path for all
+  four sections, matchday/status/team filters, kickoff ordering, fixture dialog,
+  charts, team details, change pagination/expansion, and the failed-refresh state.
+  The browser requested only static files and the published JSON. The artifact
+  inventory contained only the expected five public files.
+
+Production GitHub Pages, the cloud bucket, Neon access, the existing SQL Server
+instance, and an actual scheduled Actions run are pending. Follow the deployment,
+activation and cutover steps in [Deployment to GitHub Pages](DEPLOYMENT_PAGES.md).
+The earlier sections below record prior project stages and owner evidence.
+
+
 ## Current deployment foundation - 2026-11-12
 
 The working tree now contains a separate PostgreSQL compatibility path alongside the

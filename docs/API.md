@@ -1,6 +1,12 @@
 # Local API
 
-Status: implemented in the working tree; latest edits **NOT RUN**.
+The GitHub Pages dashboard uses a public JSON document instead of contacting
+FastAPI. The application retains these endpoints for local development and API
+testing. The Pages exporter reuses the PostgreSQL repository, public Pydantic
+response shapes, and analytics. Its versioned document contains one configured
+competition, fixture and matchday summaries, detail and change history, and insights.
+The browser performs fixture filtering, ordering and change pagination on that
+validated document. [Deployment guide](DEPLOYMENT_PAGES.md)
 
 The service binds to `127.0.0.1` by default and rejects non-loopback clients when
 `API_LOCAL_ONLY=yes`. It uses parameterized SQL Server queries, typed Pydantic

@@ -2,18 +2,47 @@
 
 ## Scope and verification boundary
 
-The implemented scope is UEFA Champions League 2026/27 (`ucl`, season `2026`,
-expected league ID `4946`). The configured league-phase expectation is Matchdays 1-8
-with 18 fixtures per matchday (144 total), while the owner has verified database
-coverage only for Matchdays 3 and 4 (36 fixtures) as of 2026-11-06. Provider,
-competition, season, expected matchdays, and expected fixtures-per-matchday are
-configuration inputs. UCL is the only competition currently implemented and
-documented; knockout groups remain opt-in after source-shape review.
+The public scope is UEFA Champions League 2026/27 (`ucl`, season key `2026`,
+OpenLigaDB league ID `4946`), covering Matchdays 1–8 with 18 fixtures per matchday.
+SQL Server remains the local database. Neon PostgreSQL stores cloud current records,
+observed changes, import provenance, and checkpoints. Render remains the fallback
+while production Pages and the scheduled workflow are verified.
 
-The owner has verified the project foundation, two real raw matchday shapes, the
-deployed 12-table schema, and the first Matchday 3 SQL import. The latest audit
-edits, exact Matchday 3 replay, Matchday 4 import, API/browser flow, live one-shot
-synchronization, and scheduling remain **NOT RUN**.
+## Public dashboard on GitHub Pages
+
+The GitHub Actions workflow runs at 02:17 UTC (08:17 Bangladesh time), or by manual
+dispatch on the default branch. It checks all eight configured matchdays daily through
+the existing Python client and PostgreSQL importer. The workflow concurrency group
+covers synchronization and Pages deployment. The PostgreSQL lease also coordinates
+with other invocations of the synchronizer. Primary and unique keys protect domain
+records and change events. A repeated retrieval can still create valid raw-capture
+provenance and a separate import record.
+
+The cloud snapshot store writes and verifies `response.json` and `metadata.json`
+before domain updates. The scheduled export permits the existing quarantine only
+for the exact reviewed Matchday 2 halftime conflict. Other validation errors stop
+publication. If a later matchday fails after earlier matchdays have committed, Neon
+keeps those valid updates and Pages keeps its prior successful artifact. A later pass
+reconciles the full scope before another publication.
+
+The exporter runs while the synchronization lease is held and reads one repeatable-
+read PostgreSQL transaction. It reuses the API repository, response models, and
+analytics functions. It reconciles fixture IDs and coverage with verified object
+bytes at each committed matchday checkpoint. It reconciles fixture status, matchdays,
+scores, goal counts, change history and match details with the SQL results. Only the
+public competition, sporting, analytical and change-provenance fields are serialized.
+
+The artifact contains `index.html`, two frontend assets, `.nojekyll`, and
+`data/dashboard.json`. The browser uses a base-relative JSON URL and handles filters,
+sorting and change pagination locally. Local FastAPI and its notes, testing and
+operational endpoints continue to use the API path. Pages publishes no credentials,
+raw response files, logs, local notes or operational exports. The Pages sync timestamp
+records completion of a full successful source pass, including a pass whose matchdays
+are unchanged. GitHub deployment time and database checkpoint timestamps describe
+separate events. [Pages deployment guide](DEPLOYMENT_PAGES.md)
+
+Daily polling can miss intermediate source changes, including changes reverted before
+the next retrieval. GitHub Actions schedules can also run late.
 
 ## Data flow
 

@@ -1,14 +1,36 @@
 # Manual Runbook
 
-## Evidence boundary
+## GitHub Pages operations
+
+1. Set up Pages, Neon roles, secrets and the private bucket using the [deployment
+   guide](DEPLOYMENT_PAGES.md). Leave scheduled runs disabled until the first
+   manual Pages deployment is verified.
+2. In GitHub Actions, inspect the last workflow run and its synchronize, artifact,
+   and deploy steps. In a browser, check the public dashboard’s **Last successful
+   sync** against that run. On failure, record the run ID and failing phase.
+3. A failure in source retrieval, storage, validation, or SQL reconciliation skips
+   deployment. Preserve the current Pages release and Render fallback. Earlier
+   matchdays in the failed pass can already have committed valid updates to Neon.
+4. For a lease conflict, check active jobs and manual sync processes. Wait for the
+   active run or lease expiration. If a matchday fails, inspect its import status
+   and validation issue codes privately. Leave raw captures in place for replay.
+5. For export or artifact failures, inspect the checkpoint’s durable object pair
+   and compare the database counts and hashes with the reconciliation procedure
+   in the deployment guide. Dispatch a fresh run after fixing the issue.
+6. For Pages deployment failures, check the Pages source and environment permissions.
+   Once fixed, rerun the failed deployment if the validated artifact still exists.
+   Otherwise dispatch again and rebuild from verified data.
+
+Daily polling can miss intermediate OpenLigaDB changes. During rollout the Pages
+pipeline and Render can have different freshness because they switch over separately.
+
+## Historical and local verification
 
 The owner has already verified the project foundation, raw Matchday 3/4 captures,
 the deployed 12-table schema, and the first successful Matchday 3 import (run `3`,
 snapshot `8`, 18 inserted matches, 36 results, 74 goals, four safe icon warnings).
 
-Everything below is a manual verification plan for the latest working tree. No new
-command in this runbook was executed by Codex. Run in order, stop at the first
-failure, and return only non-secret output. Never paste `.env`, passwords, tokens,
+The following sections retain the local, migration and historical verification procedures. Use the Pages deployment guide for cloud activation and return only non-secret output. Never paste `.env`, passwords, tokens,
 complete connection strings, or raw response content.
 
 ## Latest owner-verified evidence
@@ -444,8 +466,7 @@ goal, team, identity, and timestamp validation passes.
 The raw response and metadata must remain unchanged. The deployed schema requires one
 `match_results` row per result type, so the quarantined source records are preserved
 by the immutable raw snapshot and an auditable `validation_issues` row, not silently
-discarded or forced into a second `HalfTime` row. Synchronization does not enable this
-option automatically.
+discarded or forced into a second `HalfTime` row. Local synchronization uses strict validation. Pages applies this recovery only to the exact reviewed UCL match and variants.
 
 Where: SSMS or another confirmed SQL Server client. Target database:
 `SportsFixturesTracker` only. First retrieve the exact local directory for source
@@ -1019,10 +1040,7 @@ RUN_NEON_INTEGRATION=yes python -m pytest -q -m neon
 Expected: one database connectivity assertion and one temporary object round trip pass;
 the test deletes only its generated verification objects. This remains **NOT RUN**.
 
-The workflow schedule is twice per hour at UTC minutes 17 and 47. GitHub may delay or
-drop scheduled events; this is best-effort synchronization, not a real-time guarantee.
-OpenLigaDB's 60-requests-per-minute limit remains in force, and aggressive polling is
-prohibited. No cloud command, migration, synchronization, or deployment was run here.
+The Pages workflow runs at 08:17 Bangladesh time (02:17 UTC) daily and may be delayed by GitHub. See the [Pages deployment guide](DEPLOYMENT_PAGES.md) for activation. OpenLigaDB’s 60-requests-per-minute limit still applies.
 
 ## 13.8 Historical raw-snapshot audit and object-storage gate
 

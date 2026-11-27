@@ -1,9 +1,26 @@
 # Current Project State
 
-Updated 2026-11-12. This is the compact handoff for future agents; detailed design and
-operational procedures remain in the linked documents.
+Updated 2026-11-27.
 
-## Implemented foundations
+## GitHub Pages migration
+
+- The default-branch workflow is configured for daily synchronization at 08:17
+  Bangladesh time and manual dispatch. It archives source responses to private
+  object storage, imports to Neon PostgreSQL, reconciles against SQL and current
+  snapshot provenance, and deploys the generated Pages artifact. Render remains
+  the production fallback.
+- SQL Server and FastAPI remain the local workflow. The dashboard uses the same
+  four sections with a forest-green theme and a mobile layout fix.
+- Local execution used current OpenLigaDB data, a disposable PostgreSQL 17
+  database and a private S3-compatible test server. Their role, TLS and storage
+  paths were exercised. Production Pages, Neon credentials and the first scheduled
+  run require owner verification.
+- See [GitHub Pages deployment](DEPLOYMENT_PAGES.md) and
+  [verification evidence](BUILD_PLAN.md#github-pages-migration--2026-11-27).
+
+## Previous state recorded 2026-11-12
+
+### Implemented foundations
 
 - SQL Server remains the default local backend and its schema/import classes are unchanged.
 - PostgreSQL configuration, psycopg connection handling, a separate PostgreSQL schema,

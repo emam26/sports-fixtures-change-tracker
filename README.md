@@ -5,10 +5,9 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![PostgreSQL](https://img.shields.io/badge/Cloud%20DB-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Render](https://img.shields.io/badge/Hosted%20on-Render-111111)](https://render.com/)
 [![Source](https://img.shields.io/badge/Football%20data-OpenLigaDB-334155)](https://www.openligadb.de/)
 
-### [**Open the live dashboard**](https://sports-fixtures-change-tracker.onrender.com/) 
+### [**Open the current Render dashboard**](https://sports-fixtures-change-tracker.onrender.com/)
 
 > **Coverage:** UEFA Champions League **2026/2027 league phase** (matchdays 1–8). This project tracks stored source observations and changes
 
@@ -16,24 +15,24 @@
 
 Sports Fixtures & Change Tracker collects football fixture data from OpenLigaDB, validates it before import, and preserves what changed between observations. It is built around a simple question: **not just what does a fixture say now, but what did the source report previously, and how did it change?**
 
-The project has two connected deployment paths:
+The project has two deployment paths:
 
 - **Local data pipeline:** immutable OpenLigaDB response snapshots, validation, transactional import, and historical change tracking in Microsoft SQL Server.
-- **Public, read-only dashboard:** FastAPI and a lightweight HTML/CSS/JavaScript frontend hosted on Render, reading from a migrated Neon PostgreSQL database.
+- **Public, read-only dashboard:** GitHub Actions updates Neon PostgreSQL, verifies private snapshot provenance, exports validated JSON and deploys the HTML/CSS/JavaScript dashboard to GitHub Pages.
 
-The cloud database contains a verified historical copy of the local data. **The deployed site does not run unattended OpenLigaDB synchronization.**
+The existing Render site stays available during rollout. The GitHub Pages cutover and unattended cloud synchronization require the repository setup in [Deployment to GitHub Pages](docs/DEPLOYMENT_PAGES.md).
 
 ## Explore the dashboard
 
 | Section | What you can explore |
 | --- | --- |
 | **Overview** | Competition context, fixture totals, completed and upcoming matches, stored goal-event counts, recorded changes, and upcoming fixtures. |
-| **Match Explorer** | Search and filter fixtures by team, matchday, or status, with server-side pagination and predictable chronological ordering. |
+| **Match Explorer** | Search and filter fixtures by team, matchday, or status, with client-side filtering and predictable chronological ordering on Pages. |
 | **Insights** | Read-only team, matchday, score, result, and goal-event summaries derived from stored records. |
 | **Change Intelligence** | Fixture and result history, field-level before/after values, and source provenance where available. |
 
 
-A *Last updated* timestamp represents the latest successful recorded synchronization, **not** a promise that the source was checked at that moment. An unfinished match is not automatically considered live, and missing scores are not displayed as `0–0`.
+On Pages, **Last successful sync** shows when the published synchronization pass finished, in the browser’s timezone. Failed passes leave the published timestamp and data in place. Unfinished matches can have missing scores.
 
 ## Data coverage and verification
 
@@ -60,31 +59,29 @@ Result rows and goal-event rows are database records, not necessarily the number
 - **Transactional database writes:** fixtures, scores, events, change history, checkpoints, and import-run evidence are handled together.
 - **Idempotent replay:** an unchanged source snapshot can be reprocessed without fabricating new changes.
 - **Field-level change tracking:** historical observations are distinguishable from the current fixture state.
-- **Read-only public access:** the Render deployment is designed for public browsing, not public database writes; data modifications and synchronization are separate gated workflows.
-- **Inspectable frontend:** no frontend framework is required—just HTML, CSS, and JavaScript served by FastAPI.
+- **Static public access:** the browser reads a same-origin JSON export. GitHub Actions holds the Neon and object-store credentials and publishes an artifact from a fixed file allowlist.
+- **Shared frontend:** HTML, CSS, and JavaScript use FastAPI locally and validated JSON on Pages.
 
 ### Architecture
 
 ```mermaid
 flowchart TD
-    A[OpenLigaDB] --> B[Bounded source retrieval]
-    B --> C[Immutable snapshots + SHA-256 metadata]
-    C --> D[Parsing + validation]
-    D --> E[Transactional import + change tracking]
-    E --> F[(SQL Server - local)]
-    F --> G[Verified historical migration]
-    G --> H[(Neon PostgreSQL)]
-    F --> I[Local FastAPI]
-    H --> J[Render FastAPI - read only]
-    I --> K[Browser dashboard]
-    J --> K
+    A[OpenLigaDB] --> B[Local Python ingestion]
+    B --> C[(Microsoft SQL Server)]
+    C --> D[Local FastAPI dashboard]
+    C -. Historical migration .-> G[(Neon PostgreSQL)]
+    A --> E[Daily GitHub Actions sync]
+    E --> F[(Private S3-compatible snapshot archive)]
+    E --> G
+    G --> H[Validation and SQL reconciliation]
+    F --> H
+    H --> I[Pages artifact with frontend and JSON]
+    I --> J[Public GitHub Pages dashboard]
 ```
-
-**Important:** the migration arrow represents a verified transfer, **not** continuous replication. Original raw snapshot files currently remain outside the public Render service.
 
 ### Example: conflicting source results
 
-One Matchday 2 snapshot included conflicting halftime results for provider match `87412` (Viking vs FC Bayern München): `2–0` and `0–0`, while the separately validated final result was `3–3`. The pipeline rejects ambiguous data by default. Its explicit recovery path can quarantine the conflicting non-final variants, retain the original evidence, and preserve independently validated final-score data without arbitrarily selecting a halftime score.
+One Matchday 2 snapshot included conflicting halftime results for provider match `87412` (Viking vs FC Bayern München): `2–0` and `0–0`, while the separately validated final result was `3–3`. The pipeline rejects ambiguous data by default. The Pages sync uses the previously reviewed quarantine for those exact two records and preserves the independently validated final score. New conflicts still block publication.
 
 See [source notes](docs/SOURCE_NOTES.md), [architecture](docs/ARCHITECTURE.md), and the [manual runbook](docs/MANUAL_RUNBOOK.md) for the audit and recovery boundaries.
 
@@ -97,7 +94,7 @@ See [source notes](docs/SOURCE_NOTES.md), [architecture](docs/ARCHITECTURE.md), 
 | Cloud persistence | PostgreSQL on Neon, `psycopg` 3 |
 | Backend | FastAPI, Uvicorn |
 | Frontend | HTML, CSS, vanilla JavaScript |
-| Hosting | Render web service |
+| Public hosting | GitHub Pages with GitHub Actions deployment artifacts |
 | Quality checks | pytest, Ruff, SQL parity and snapshot checks |
 | Football data provider | OpenLigaDB |
 
@@ -142,7 +139,7 @@ ruff format --check .
 python -m pytest -q -m "not sqlserver and not neon"
 ```
 
-The latest owner-reported local verification included **209 passing tests, 2 deselected**, and a Starlette deprecation warning. This is historical verification, not an automatically updating CI badge or a claim that tests were rerun for this README edit.
+SQL Server and Neon integration tests require isolated targets and explicit opt-in. See the [testing guide](docs/TESTING.md).
 
 ## Repository map
 
@@ -166,6 +163,7 @@ The latest owner-reported local verification included **209 passing tests, 2 des
 | [Build plan](docs/BUILD_PLAN.md) | Implementation phases and evidence ledger |
 | [Manual runbook](docs/MANUAL_RUNBOOK.md) | Safe operation, troubleshooting, imports, and recovery |
 | [Testing](docs/TESTING.md) | Unit, integration, and verification strategy |
+| [GitHub Pages deployment](docs/DEPLOYMENT_PAGES.md) | Secrets, first deployment, activation, and recovery |
 | [Deployment feasibility](docs/POSTGRES_DEPLOYMENT_FEASIBILITY.md) | PostgreSQL/Neon migration design and constraints |
 | [Source notes](docs/SOURCE_NOTES.md) | OpenLigaDB observations and provider caveats |
 
@@ -176,13 +174,8 @@ The latest owner-reported local verification included **209 passing tests, 2 des
 | Local SQL Server data pipeline | Implemented and owner-verified |
 | Historical SQL Server → Neon migration | Verified (12/12 checked tables matched) |
 | Render-hosted public dashboard | **Deployed**; database API connectivity verified |
-| Public API write access | Disabled by deployment design |
-| Automatic cloud source synchronization | **Not enabled** |
-| Durable cloud storage for raw source snapshots | **Not yet configured** |
-| Knockout-stage tracking and other competitions | Outside verified current scope |
+| GitHub Pages and automated cloud sync | Implemented. Production setup and an observed scheduled run are pending. |
+| Durable cloud storage for raw source snapshots | Private S3-compatible adapter. Production bucket and historical object audit require verification. |
+| Knockout-stage tracking and other competitions | Outside the published scope |
 
-Additional boundaries: OpenLigaDB is a community-maintained source; data may be incomplete or delayed. The dashboard does not claim official UEFA standings, xG, possession, guaranteed live scores, or uninterrupted availability. Render's free service may have cold-start delays after inactivity.
-
----
-
-**[Visit the live dashboard](https://sports-fixtures-change-tracker.onrender.com/)** · **[Browse the code](https://github.com/emam26/sports-fixtures-change-tracker)**
+The workflow is scheduled once daily at **8:17 AM Bangladesh time (02:17 UTC)**. GitHub may delay the start. **Daily polling can miss intermediate source changes**, including updates that are reversed between polls. The dashboard records observed changes and OpenLigaDB can update records late or leave fields incomplete. [Deployment and verification instructions](docs/DEPLOYMENT_PAGES.md)

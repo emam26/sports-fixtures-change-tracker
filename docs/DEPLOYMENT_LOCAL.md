@@ -3,6 +3,8 @@
 Status: API, wrapper, and scheduling configuration after the latest edits are **NOT
 RUN**. Do not activate a task until every prerequisite below passes manually.
 
+Public dashboard deployment is covered in [Deployment to GitHub Pages](DEPLOYMENT_PAGES.md).
+
 ## Security posture
 
 This is a single-machine application. Keep FastAPI bound to `127.0.0.1`; the CLI
