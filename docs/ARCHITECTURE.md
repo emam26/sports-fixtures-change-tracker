@@ -18,8 +18,10 @@ with other invocations of the synchronizer. Primary and unique keys protect doma
 records and change events. A repeated retrieval can still create valid raw-capture
 provenance and a separate import record.
 
-The cloud snapshot store writes and verifies `response.json` and `metadata.json`
-before domain updates. The scheduled export permits the existing quarantine only
+The Pages snapshot store writes the exact `response.json` and `metadata.json` bytes
+into the private PostgreSQL archive before domain updates. The archive has separate
+SHA-256 checks for both files and insert/select-only runtime grants. The optional
+S3 adapter remains for legacy use; it is not required by Pages. The scheduled export permits the existing quarantine only
 for the exact reviewed Matchday 2 halftime conflict. Other validation errors stop
 publication. If a later matchday fails after earlier matchdays have committed, Neon
 keeps those valid updates and Pages keeps its prior successful artifact. A later pass
@@ -27,7 +29,7 @@ reconciles the full scope before another publication.
 
 The exporter runs while the synchronization lease is held and reads one repeatable-
 read PostgreSQL transaction. It reuses the API repository, response models, and
-analytics functions. It reconciles fixture IDs and coverage with verified object
+analytics functions. It reconciles fixture IDs and coverage with verified archive
 bytes at each committed matchday checkpoint. It reconciles fixture status, matchdays,
 scores, goal counts, change history and match details with the SQL results. Only the
 public competition, sporting, analytical and change-provenance fields are serialized.

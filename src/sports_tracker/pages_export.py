@@ -36,6 +36,7 @@ from .api.models import (
 from .api.postgres_repository import PostgreSQLRepository
 from .config import OpenLigaDBSettings, load_object_storage_settings
 from .ingestion import ParsedSnapshot, load_snapshot
+from .postgres_snapshot_store import POSTGRES_ARCHIVE_KEYS, PostgreSQLSnapshotStore
 from .runtime import ConnectionFactory
 from .storage import NeonS3SnapshotStore, SnapshotStore, build_snapshot_object_key
 
@@ -175,8 +176,14 @@ def _reconcile_sync_scope(
     connection, source: OpenLigaDBSettings, season_id: int, scope: dict
 ) -> None:
     """Verify that the committed checkpoints, private blobs and exported fixture IDs agree."""
-    object_settings = load_object_storage_settings()
-    store: SnapshotStore = NeonS3SnapshotStore(object_settings)
+    if source.raw_snapshot_storage == "postgresql":
+        key_settings = POSTGRES_ARCHIVE_KEYS
+        store: SnapshotStore = PostgreSQLSnapshotStore(connection)
+    elif source.raw_snapshot_storage == "object":
+        key_settings = load_object_storage_settings()
+        store = NeonS3SnapshotStore(key_settings)
+    else:
+        raise PagesExportError("Pages export requires durable snapshot storage.")
     checkpoints = connection.execute(
         """
         SELECT cp.matchday_number, ss.local_directory, ss.sha256, ss.byte_count,
@@ -212,14 +219,14 @@ def _reconcile_sync_scope(
         timestamp = row["retrieved_at_utc"].astimezone(UTC)
         sha256 = row["sha256"]
         key = build_snapshot_object_key(
-            object_settings,
+            key_settings,
             shortcut=source.shortcut,
             season=source.season,
             matchday=day,
             retrieved_at_utc=timestamp.isoformat(),
             sha256=sha256,
         )
-        _require(key == row["local_directory"], f"Matchday {day} has no verified object locator.")
+        _require(key == row["local_directory"], f"Matchday {day} has no verified archive locator.")
         snapshot = store.get(key)
         metadata = snapshot.metadata
         _require(

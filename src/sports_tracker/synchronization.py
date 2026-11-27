@@ -26,6 +26,7 @@ from sports_tracker.openligadb import (
     OpenLigaDBResponse,
     build_last_change_url,
 )
+from sports_tracker.postgres_snapshot_store import PostgreSQLSnapshotStore, archive_key
 from sports_tracker.runtime import ConnectionFactory
 from sports_tracker.snapshots import save_raw_snapshot
 from sports_tracker.storage import (
@@ -507,7 +508,22 @@ class SyncCoordinator:
             settings=self._settings,
             matchday=matchday,
         )
+        postgres_key = None
+        if self._settings.raw_snapshot_storage == "postgresql":
+            # Persist the exact staged pair before parsing/import; rejected source evidence
+            # remains available even when no domain transaction succeeds.
+            body = (directory / "response.json").read_bytes()
+            metadata_bytes = (directory / "metadata.json").read_bytes()
+            if body != response.body or hashlib.sha256(body).hexdigest() != digest:
+                raise SyncError("Staged response bytes do not match the retrieved response.")
+            postgres_key = archive_key(json.loads(metadata_bytes))
+            with closing(self._connection_factory()) as connection:
+                store = PostgreSQLSnapshotStore(connection)
+                store.put_files(postgres_key, body, metadata_bytes, expected_sha256=digest)
+                connection.commit()
         parsed = self._snapshot_loader(directory, self._settings)
+        if postgres_key is not None:
+            parsed = replace(parsed, directory=Path(postgres_key))
         if self._settings.raw_snapshot_storage == "object":
             object_settings = load_object_storage_settings()
             digest = hashlib.sha256(response.body).hexdigest()

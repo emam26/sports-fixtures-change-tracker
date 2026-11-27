@@ -41,6 +41,7 @@ pythonpath = ["src"]
 addopts = ["-ra"]
 markers = [
     "neon: opt-in integration tests that require an isolated Neon target",
+    "postgres_archive: tests requiring an isolated PostgreSQL archive database",
     "sqlserver: opt-in integration tests that require an isolated SQL Server database",
 ]
 

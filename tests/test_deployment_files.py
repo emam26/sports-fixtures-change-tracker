@@ -15,12 +15,14 @@ def test_render_configuration_is_public_readonly_and_does_not_contain_credential
     assert "password" not in text.lower()
 
 
-def test_scheduled_workflow_is_concurrent_safe_and_object_storage_fail_closed() -> None:
+def test_scheduled_workflow_is_concurrent_safe_and_postgresql_archive_fail_closed() -> None:
     text = (ROOT / ".github" / "workflows" / "synchronize.yml").read_text(encoding="utf-8")
     assert 'cron: "17 2 * * *"' in text
     assert "cancel-in-progress: false" in text
     assert "workflow_dispatch" in text
-    assert "RAW_SNAPSHOT_STORAGE: object" in text
+    assert "RAW_SNAPSHOT_STORAGE: postgresql" in text
+    assert "OBJECT_STORAGE_" not in text
+    assert "pip install ." in text
     assert "needs: synchronize" in text
     assert "uses: actions/upload-pages-artifact@" in text
     assert "uses: actions/deploy-pages@" in text

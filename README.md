@@ -18,7 +18,7 @@ Sports Fixtures & Change Tracker collects football fixture data from OpenLigaDB,
 The project has two deployment paths:
 
 - **Local data pipeline:** immutable OpenLigaDB response snapshots, validation, transactional import, and historical change tracking in Microsoft SQL Server.
-- **Public, read-only dashboard:** GitHub Actions updates Neon PostgreSQL, verifies private snapshot provenance, exports validated JSON and deploys the HTML/CSS/JavaScript dashboard to GitHub Pages.
+- **Public, read-only dashboard:** GitHub Actions updates Neon PostgreSQL, stores and verifies private raw snapshot bytes there, exports validated JSON and deploys the HTML/CSS/JavaScript dashboard to GitHub Pages.
 
 The existing Render site stays available during rollout. The GitHub Pages cutover and unattended cloud synchronization require the repository setup in [Deployment to GitHub Pages](docs/DEPLOYMENT_PAGES.md).
 
@@ -59,7 +59,7 @@ Result rows and goal-event rows are database records, not necessarily the number
 - **Transactional database writes:** fixtures, scores, events, change history, checkpoints, and import-run evidence are handled together.
 - **Idempotent replay:** an unchanged source snapshot can be reprocessed without fabricating new changes.
 - **Field-level change tracking:** historical observations are distinguishable from the current fixture state.
-- **Static public access:** the browser reads a same-origin JSON export. GitHub Actions holds the Neon and object-store credentials and publishes an artifact from a fixed file allowlist.
+- **Static public access:** the browser reads a same-origin JSON export. GitHub Actions holds the Neon synchronization credential and publishes an artifact from a fixed file allowlist.
 - **Shared frontend:** HTML, CSS, and JavaScript use FastAPI locally and validated JSON on Pages.
 
 ### Architecture
@@ -71,7 +71,7 @@ flowchart TD
     C --> D[Local FastAPI dashboard]
     C -. Historical migration .-> G[(Neon PostgreSQL)]
     A --> E[Daily GitHub Actions sync]
-    E --> F[(Private S3-compatible snapshot archive)]
+    E --> F[(Private raw snapshot archive in Neon)]
     E --> G
     G --> H[Validation and SQL reconciliation]
     F --> H
@@ -175,7 +175,7 @@ SQL Server and Neon integration tests require isolated targets and explicit opt-
 | Historical SQL Server → Neon migration | Verified (12/12 checked tables matched) |
 | Render-hosted public dashboard | **Deployed**; database API connectivity verified |
 | GitHub Pages and automated cloud sync | Implemented. Production setup and an observed scheduled run are pending. |
-| Durable cloud storage for raw source snapshots | Private S3-compatible adapter. Production bucket and historical object audit require verification. |
+| Durable cloud storage for raw source snapshots | PostgreSQL BYTEA archive; production migration and audit require verification. |
 | Knockout-stage tracking and other competitions | Outside the published scope |
 
 The workflow is scheduled once daily at **8:17 AM Bangladesh time (02:17 UTC)**. GitHub may delay the start. **Daily polling can miss intermediate source changes**, including updates that are reversed between polls. The dashboard records observed changes and OpenLigaDB can update records late or leave fields incomplete. [Deployment and verification instructions](docs/DEPLOYMENT_PAGES.md)

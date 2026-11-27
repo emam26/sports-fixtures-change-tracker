@@ -2,7 +2,16 @@
 
 Updated 2026-11-27.
 
-## GitHub Pages migration
+## Neon-only Pages handoff (proposed production migration)
+
+The Pages workflow now selects the PostgreSQL exact-byte snapshot archive. No S3
+account or credentials are required. Apply migration 003 on an isolated branch,
+audit and migrate all historical local captures, then repeat on production with
+scheduled synchronization disabled. See DEPLOYMENT_PAGES.md. Production checks
+and activation remain pending; the earlier Pages section records the superseded
+S3-based design and its historical verification only.
+
+## Previous GitHub Pages migration (S3-based)
 
 - The default-branch workflow is configured for daily synchronization at 08:17
   Bangladesh time and manual dispatch. It archives source responses to private
